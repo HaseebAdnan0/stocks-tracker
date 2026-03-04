@@ -6,6 +6,7 @@
 
 import Database from 'better-sqlite3';
 import path from 'path';
+import fs from 'fs';
 
 // Types for database records
 export interface User {
@@ -81,13 +82,18 @@ export interface TrackedSymbol {
 }
 
 // Database path
-const DB_PATH = path.join(process.cwd(), 'data', 'db.sqlite3');
+const DATA_DIR = path.join(process.cwd(), 'data');
+const DB_PATH = path.join(DATA_DIR, 'db.sqlite3');
 
 // Create database connection
 let db: Database.Database | null = null;
 
 export function getDb(): Database.Database {
   if (!db) {
+    // Ensure data directory exists
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
     db = new Database(DB_PATH);
     db.pragma('journal_mode = WAL');
     initializeSchema();
