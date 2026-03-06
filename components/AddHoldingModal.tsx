@@ -28,6 +28,7 @@ export default function AddHoldingModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [filteredSymbols, setFilteredSymbols] = useState<string[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [showNonKmiWarning, setShowNonKmiWarning] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -42,6 +43,7 @@ export default function AddHoldingModal({
       setErrors({});
       setFilteredSymbols([]);
       setShowDropdown(false);
+      setShowNonKmiWarning(false);
     }
   }, [isOpen, initialSymbol]);
 
@@ -52,9 +54,13 @@ export default function AddHoldingModal({
       );
       setFilteredSymbols(filtered);
       setShowDropdown(filtered.length > 0);
+      // Show warning if symbol is entered but not in KMI-30
+      const isKmi30 = KMI_30_SYMBOLS.includes(formData.symbol.toUpperCase() as never);
+      setShowNonKmiWarning(!isKmi30 && formData.symbol.length >= 2);
     } else {
       setFilteredSymbols([...KMI_30_SYMBOLS]);
       setShowDropdown(false);
+      setShowNonKmiWarning(false);
     }
   }, [formData.symbol]);
 
@@ -81,8 +87,6 @@ export default function AddHoldingModal({
 
     if (!formData.symbol) {
       newErrors.symbol = 'Symbol is required';
-    } else if (!KMI_30_SYMBOLS.includes(formData.symbol.toUpperCase() as never)) {
-      newErrors.symbol = 'Symbol must be from KMI-30 index';
     }
 
     if (!formData.quantity) {
@@ -196,10 +200,18 @@ export default function AddHoldingModal({
               className={`w-full px-4 py-3 bg-gray-700 border ${
                 errors.symbol ? 'border-red-500' : 'border-gray-600'
               } rounded text-white focus:outline-none focus:border-blue-500`}
-              placeholder="Type to search KMI-30 symbols"
+              placeholder="Enter stock symbol (e.g., LUCK, SYS)"
               autoComplete="off"
             />
             {errors.symbol && <p className="mt-1 text-sm text-red-500">{errors.symbol}</p>}
+            {showNonKmiWarning && !errors.symbol && (
+              <div className="mt-2 p-2 bg-yellow-900/30 border border-yellow-600/50 rounded flex items-start gap-2">
+                <svg className="w-4 h-4 text-yellow-500 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+                <p className="text-xs text-yellow-200">This symbol is not in the KMI-30 Shariah index. You can still add it, but it may not be Shariah-compliant.</p>
+              </div>
+            )}
 
             {showDropdown && (
               <div className="absolute z-10 w-full mt-1 bg-gray-700 border border-gray-600 rounded shadow-lg max-h-48 overflow-y-auto">
