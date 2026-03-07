@@ -94,24 +94,32 @@ interface KlinesResponse {
 interface FundamentalsResponse {
   success: boolean;
   data: {
-    eps?: number;
-    peRatio?: number;
-    bookValue?: number;
-    marketCap?: number;
-    dividendYield?: number;
+    symbol: string;
     sector?: string;
+    listedIn?: string;
+    marketCap?: string; // String like "561.2B"
+    price?: number;
+    changePercent?: number;
+    yearChange?: number;
+    peRatio?: number;
+    dividendYield?: number;
+    freeFloat?: string;
+    volume30Avg?: number;
+    isNonCompliant?: boolean;
   };
 }
 
 interface DividendsResponse {
   success: boolean;
   data: Array<{
-    announceDate?: string;
-    exDate?: string;
-    dividendType?: string;
+    symbol: string;
+    ex_date?: string;
+    payment_date?: string;
+    record_date?: string;
     amount?: number;
-    percentage?: number;
+    year?: number;
   }>;
+  count?: number;
 }
 
 /**
@@ -235,11 +243,46 @@ export async function fetchRealTimeStock(symbol: string): Promise<MarketWatchSto
 }
 
 /**
- * Fetch end-of-day historical data from PSX Terminal.
+ * Fetch end-of-day historical data from PSX Data Portal (primary) or PSX Terminal (fallback).
+ * PSX Data Portal format: [timestamp, open, volume, close] - no high/low
  */
 export async function fetchEodHistory(symbol: string, days: number = 365): Promise<EODRecord[] | null> {
+  const upperSymbol = symbol.toUpperCase();
+
+  // Try PSX Data Portal first (more reliable, no rate limiting)
   try {
-    const url = `${PSX_TERMINAL_API}/klines/${encodeURIComponent(symbol.toUpperCase())}/1d?limit=${days}`;
+    const url = `${PSX_DATA_PORTAL}/timeseries/eod/${encodeURIComponent(upperSymbol)}`;
+    const response = await fetch(url, { headers: HEADERS });
+
+    if (response.ok) {
+      const data = await response.json();
+
+      if (data.status === 1 && Array.isArray(data.data) && data.data.length > 0) {
+        const records = data.data
+          .map((item: [number, number, number, number]) => {
+            const [timestamp, open, volume, close] = item;
+            return {
+              date: new Date(timestamp * 1000).toISOString().split('T')[0],
+              open,
+              high: Math.max(open, close), // Approximate high from open/close
+              low: Math.min(open, close),  // Approximate low from open/close
+              close,
+              volume,
+            };
+          })
+          .sort((a: EODRecord, b: EODRecord) => a.date.localeCompare(b.date));
+
+        // Limit to requested days
+        return records.slice(-days);
+      }
+    }
+  } catch (error) {
+    // Silently fall through to PSX Terminal
+  }
+
+  // Fallback to PSX Terminal API
+  try {
+    const url = `${PSX_TERMINAL_API}/klines/${encodeURIComponent(upperSymbol)}/1d?limit=${days}`;
     const response = await fetch(url, { headers: HEADERS });
 
     if (!response.ok) {
@@ -253,7 +296,6 @@ export async function fetchEodHistory(symbol: string, days: number = 365): Promi
     const data: KlinesResponse = await response.json();
 
     if (!data.success || !Array.isArray(data.data)) {
-      console.error(`EOD history response for ${symbol} is invalid`);
       return null;
     }
 
@@ -274,7 +316,28 @@ export async function fetchEodHistory(symbol: string, days: number = 365): Promi
 }
 
 /**
- * Fetch fundamental data from PSX Terminal.
+ * Parse market cap string like "561.2B" or "1.5M" to number.
+ */
+function parseMarketCap(marketCapStr: string | undefined): number | null {
+  if (!marketCapStr) return null;
+  const match = marketCapStr.match(/^([\d.]+)([BMK])?$/i);
+  if (!match) return null;
+
+  const value = parseFloat(match[1]);
+  const suffix = (match[2] || '').toUpperCase();
+
+  if (isNaN(value)) return null;
+
+  switch (suffix) {
+    case 'B': return value * 1_000_000_000;
+    case 'M': return value * 1_000_000;
+    case 'K': return value * 1_000;
+    default: return value;
+  }
+}
+
+/**
+ * Fetch fundamental data from PSX Terminal API.
  */
 export async function fetchFundamentals(symbol: string): Promise<Fundamentals | null> {
   try {
@@ -282,24 +345,28 @@ export async function fetchFundamentals(symbol: string): Promise<Fundamentals | 
     const response = await fetch(url, { headers: HEADERS });
 
     if (!response.ok) {
-      console.error(`Fundamentals fetch failed for ${symbol}: ${response.status}`);
       return null;
     }
 
     const data: FundamentalsResponse = await response.json();
 
     if (!data.success || !data.data) {
-      console.error(`Fundamentals response for ${symbol} is invalid`);
       return null;
     }
 
     const f = data.data;
 
+    // Calculate EPS from price and P/E ratio if available
+    let eps: number | null = null;
+    if (f.price && f.peRatio && f.peRatio > 0) {
+      eps = f.price / f.peRatio;
+    }
+
     return {
-      eps: f.eps ?? null,
+      eps,
       pe_ratio: f.peRatio ?? null,
-      book_value: f.bookValue ?? null,
-      market_cap: f.marketCap ?? null,
+      book_value: null, // Not available in this API
+      market_cap: parseMarketCap(f.marketCap),
       dividend_yield: f.dividendYield ?? null,
       sector: f.sector ?? null,
     };
@@ -318,21 +385,19 @@ export async function fetchDividendHistory(symbol: string): Promise<DividendReco
     const response = await fetch(url, { headers: HEADERS });
 
     if (!response.ok) {
-      console.error(`Dividend history fetch failed for ${symbol}: ${response.status}`);
       return null;
     }
 
     const data: DividendsResponse = await response.json();
 
     if (!data.success || !Array.isArray(data.data)) {
-      console.error(`Dividend history response for ${symbol} is invalid`);
       return null;
     }
 
     return data.data.map((item) => ({
-      announcement_date: item.announceDate || item.exDate || '',
-      type: item.dividendType || 'Cash',
-      amount: item.amount || item.percentage || 0,
+      announcement_date: item.ex_date || item.record_date || '',
+      type: 'Cash', // PSX Terminal doesn't distinguish type
+      amount: item.amount || 0,
     }));
   } catch (error) {
     console.error(`Error fetching dividend history for ${symbol}:`, error);
