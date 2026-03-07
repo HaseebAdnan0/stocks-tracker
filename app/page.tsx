@@ -305,17 +305,19 @@ function DashboardContent() {
               <option value="KMIALLSHR">KMI All Shares ({KMI_ALL_SHARES_STOCKS.length})</option>
             </select>
 
-            {/* WebSocket Status */}
-            <div
-              className={`px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1 ${
-                isConnected
-                  ? 'bg-green-500/20 text-green-400 border border-green-500/50'
-                  : 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/50'
-              }`}
-            >
-              <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400 animate-pulse' : 'bg-yellow-400'}`} />
-              {isConnected ? 'LIVE' : 'Polling'}
-            </div>
+            {/* WebSocket Status - only show when market is open */}
+            {marketStatus.open && (
+              <div
+                className={`px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1 ${
+                  isConnected
+                    ? 'bg-green-500/20 text-green-400 border border-green-500/50'
+                    : 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/50'
+                }`}
+              >
+                <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400 animate-pulse' : 'bg-yellow-400'}`} />
+                {isConnected ? 'LIVE' : 'Polling'}
+              </div>
+            )}
 
             {/* Market Status */}
             <div

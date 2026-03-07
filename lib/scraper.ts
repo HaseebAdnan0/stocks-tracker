@@ -243,7 +243,10 @@ export async function fetchEodHistory(symbol: string, days: number = 365): Promi
     const response = await fetch(url, { headers: HEADERS });
 
     if (!response.ok) {
-      console.error(`EOD history fetch failed for ${symbol}: ${response.status}`);
+      // Don't spam console - EOD failures are common due to rate limiting
+      if (response.status !== 400 && response.status !== 503) {
+        console.error(`EOD history fetch failed for ${symbol}: ${response.status}`);
+      }
       return null;
     }
 
