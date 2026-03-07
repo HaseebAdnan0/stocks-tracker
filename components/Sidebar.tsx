@@ -26,7 +26,7 @@ export default function Sidebar() {
   return (
     <>
       {/* Sidebar - Desktop */}
-      <aside className="hidden md:flex md:flex-col md:w-48 bg-[#16213e] border-r border-gray-700">
+      <aside className="hidden md:flex md:flex-col md:w-52 bg-[#16213e] border-r border-gray-700">
         <div className="flex items-center h-16 px-6 border-b border-gray-700">
           <h1 className="text-lg font-bold text-green-400">PSX Tracker</h1>
         </div>
@@ -35,7 +35,7 @@ export default function Sidebar() {
             <Link
               key={item.path}
               href={item.path}
-              className={`flex items-center px-4 py-3 rounded-lg transition-colors ${
+              className={`flex items-center px-4 py-3 rounded-lg transition-colors whitespace-nowrap ${
                 isActivePath(item.path)
                   ? 'bg-green-500/20 text-green-400 font-semibold'
                   : 'text-gray-300 hover:bg-gray-700/50 hover:text-white'
@@ -72,7 +72,7 @@ export default function Sidebar() {
             className="fixed inset-0 bg-black/50"
             onClick={() => setSidebarOpen(false)}
           ></div>
-          <aside className="fixed inset-y-0 left-0 w-48 bg-[#16213e] border-r border-gray-700">
+          <aside className="fixed inset-y-0 left-0 w-52 bg-[#16213e] border-r border-gray-700">
             <div className="flex items-center justify-between h-16 px-6 border-b border-gray-700">
               <h1 className="text-lg font-bold text-green-400">PSX Tracker</h1>
               <button
@@ -88,7 +88,7 @@ export default function Sidebar() {
                   key={item.path}
                   href={item.path}
                   onClick={() => setSidebarOpen(false)}
-                  className={`flex items-center px-4 py-3 rounded-lg transition-colors ${
+                  className={`flex items-center px-4 py-3 rounded-lg transition-colors whitespace-nowrap ${
                     isActivePath(item.path)
                       ? 'bg-green-500/20 text-green-400 font-semibold'
                       : 'text-gray-300 hover:bg-gray-700/50 hover:text-white'
