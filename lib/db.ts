@@ -81,8 +81,9 @@ export interface TrackedSymbol {
   added_at: string;
 }
 
-// Database path
-const DATA_DIR = path.join(process.cwd(), 'data');
+// Database path - Use DATA_DIR env var for production (persistent storage outside deployment)
+// On Hostinger: set DATA_DIR=/home/username/data in environment variables
+const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
 const DB_PATH = path.join(DATA_DIR, 'db.sqlite3');
 
 // Create database connection
