@@ -47,7 +47,7 @@ interface Summary {
   };
 }
 
-type ViewMode = 'active' | 'archived';
+type ViewMode = 'all' | 'active' | 'archived';
 
 function PortfolioContent() {
   const [holdings, setHoldings] = useState<Holding[]>([]);
@@ -61,7 +61,7 @@ function PortfolioContent() {
   const [deletingHolding, setDeletingHolding] = useState<Holding | null>(null);
   const [isSellModalOpen, setIsSellModalOpen] = useState(false);
   const [sellingHolding, setSellingHolding] = useState<Holding | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>('active');
+  const [viewMode, setViewMode] = useState<ViewMode>('all');
 
   useEffect(() => {
     fetchPortfolio();
@@ -146,7 +146,18 @@ function PortfolioContent() {
   // Filter holdings based on view mode
   const activeHoldings = holdings.filter((h) => h.quantity > 0);
   const archivedHoldings = holdings.filter((h) => h.quantity === 0);
-  const displayedHoldings = viewMode === 'active' ? activeHoldings : archivedHoldings;
+
+  // Sort: active holdings first (sorted by symbol), then archived (sorted by symbol)
+  const sortedActiveHoldings = [...activeHoldings].sort((a, b) => a.symbol.localeCompare(b.symbol));
+  const sortedArchivedHoldings = [...archivedHoldings].sort((a, b) => a.symbol.localeCompare(b.symbol));
+  const allHoldingsSorted = [...sortedActiveHoldings, ...sortedArchivedHoldings];
+
+  const displayedHoldings =
+    viewMode === 'all'
+      ? allHoldingsSorted
+      : viewMode === 'active'
+      ? sortedActiveHoldings
+      : sortedArchivedHoldings;
 
   if (loading) {
     return <LoadingSpinner message="Loading your portfolio..." />;
@@ -186,7 +197,7 @@ function PortfolioContent() {
         </button>
       </div>
 
-      {hasStaleData && viewMode === 'active' && (
+      {hasStaleData && viewMode !== 'archived' && (
         <div className="mb-6 bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 flex items-start gap-3">
           <svg className="w-6 h-6 text-yellow-500 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
             <path
@@ -294,6 +305,16 @@ function PortfolioContent() {
           {/* View Mode Tabs */}
           <div className="flex gap-2 mb-4">
             <button
+              onClick={() => setViewMode('all')}
+              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                viewMode === 'all'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              All ({holdings.length})
+            </button>
+            <button
               onClick={() => setViewMode('active')}
               className={`px-4 py-2 rounded-lg font-medium transition-colors ${
                 viewMode === 'active'
@@ -318,7 +339,9 @@ function PortfolioContent() {
           {displayedHoldings.length === 0 ? (
             <div className="text-center py-12 bg-gray-800 rounded-lg">
               <p className="text-gray-400">
-                {viewMode === 'active'
+                {viewMode === 'all'
+                  ? 'No holdings yet. Add your first holding to get started.'
+                  : viewMode === 'active'
                   ? 'No active holdings. Add a new holding or check archived.'
                   : 'No archived holdings. Sold positions will appear here.'}
               </p>
@@ -331,18 +354,18 @@ function PortfolioContent() {
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Symbol</th>
                     <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Qty</th>
                     <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Buy Price</th>
-                    {viewMode === 'active' && (
+                    {viewMode !== 'archived' && (
                       <>
                         <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Current Price</th>
                         <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Change %</th>
                       </>
                     )}
                     <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Investment</th>
-                    {viewMode === 'active' && (
+                    {viewMode !== 'archived' && (
                       <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Current Value</th>
                     )}
                     <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">
-                      {viewMode === 'active' ? 'P&L' : 'Realized P&L'}
+                      {viewMode === 'archived' ? 'Realized P&L' : 'P&L'}
                     </th>
                     <th className="px-6 py-3 text-center text-xs font-medium text-gray-300 uppercase">Actions</th>
                   </tr>
@@ -361,27 +384,31 @@ function PortfolioContent() {
                           </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
-                          {formatNumber(holding.quantity)}
+                          {isArchived ? (
+                            <span className="text-gray-500">SOLD</span>
+                          ) : (
+                            formatNumber(holding.quantity)
+                          )}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
                           {formatPKR(holding.buy_price)}
                         </td>
-                        {viewMode === 'active' && (
+                        {viewMode !== 'archived' && (
                           <>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
-                              {formatPKR(holding.current_price)}
+                              {isArchived ? '—' : formatPKR(holding.current_price)}
                             </td>
-                            <td className={`px-6 py-4 whitespace-nowrap text-sm text-right ${getPnLColor(holding.change_percent)}`}>
-                              {formatPercent(holding.change_percent)}
+                            <td className={`px-6 py-4 whitespace-nowrap text-sm text-right ${isArchived ? 'text-gray-500' : getPnLColor(holding.change_percent)}`}>
+                              {isArchived ? '—' : formatPercent(holding.change_percent)}
                             </td>
                           </>
                         )}
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
                           {formatPKR(holding.investment)}
                         </td>
-                        {viewMode === 'active' && (
+                        {viewMode !== 'archived' && (
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
-                            {formatPKR(holding.current_value)}
+                            {isArchived ? '—' : formatPKR(holding.current_value)}
                           </td>
                         )}
                         <td className={`px-6 py-4 whitespace-nowrap text-sm text-right font-semibold ${getPnLColor(displayPnL)}`}>
@@ -395,7 +422,7 @@ function PortfolioContent() {
                             >
                               Edit
                             </button>
-                            {viewMode === 'active' && (
+                            {!isArchived && (
                               <button
                                 onClick={() => handleSellClick(holding)}
                                 className="px-3 py-1 bg-orange-600 hover:bg-orange-700 text-white rounded transition-colors"
@@ -419,8 +446,8 @@ function PortfolioContent() {
             </div>
           )}
 
-          {/* What If Analysis Section - Only show for active holdings */}
-          {viewMode === 'active' && summary && summary.what_if && activeHoldings.length > 0 && (
+          {/* What If Analysis Section - Show for all and active views */}
+          {viewMode !== 'archived' && summary && summary.what_if && activeHoldings.length > 0 && (
             <div className="mt-8 bg-gray-800 rounded-lg shadow p-6">
               <h3 className="text-2xl font-bold text-white mb-4">What If Analysis</h3>
               <p className="text-gray-400 text-sm mb-6">
