@@ -480,10 +480,7 @@ function DashboardContent() {
                       <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-white">
                         <div className="flex items-center gap-2">
                           <span>{isExpanded ? '▼' : '▶'}</span>
-                          <div>
-                            <div className="font-semibold">{stock.symbol}</div>
-                            <div className="text-xs text-gray-400 truncate max-w-[200px]">{stock.name}</div>
-                          </div>
+                          <span className="font-semibold">{stock.symbol}</span>
                         </div>
                       </td>
                       <td
@@ -517,6 +514,8 @@ function DashboardContent() {
                     {isExpanded && (
                       <tr className="bg-gray-750">
                         <td colSpan={8} className="px-6 py-4">
+                          {/* Stock Full Name */}
+                          <h3 className="text-lg font-semibold text-white mb-4">{stock.name}</h3>
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             {/* 52-Week Range */}
                             <div>
