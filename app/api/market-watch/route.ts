@@ -1,9 +1,17 @@
 import { NextResponse } from 'next/server';
-import { getTrackedSymbolsList } from '@/lib/db';
+import { KMI_30_STOCKS, KMI_ALL_SHARES_STOCKS, IndexType } from '@/lib/config';
 import { getCachedMarketWatch, getCachedEodHistory, calculate52WeekRange } from '@/lib/cache';
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const { searchParams } = new URL(request.url);
+    const indexParam = searchParams.get('index') as IndexType | null;
+
+    // Determine which index to use
+    const selectedIndex: IndexType = indexParam === 'KMIALLSHR' ? 'KMIALLSHR' : 'KMI30';
+    const indexStocks = selectedIndex === 'KMI30' ? KMI_30_STOCKS : KMI_ALL_SHARES_STOCKS;
+    const indexSymbols = indexStocks.map(s => s.symbol);
+
     // Get market watch data from cache
     const { data: marketData, fetched_at, is_stale } = await getCachedMarketWatch();
 
@@ -14,15 +22,17 @@ export async function GET() {
       );
     }
 
-    // Get tracked symbols from database
-    const trackedSymbols = getTrackedSymbolsList();
+    // Filter to only index symbols
+    let filteredData = marketData.filter((stock) => indexSymbols.includes(stock.symbol));
 
-    // Filter to only tracked symbols
-    let filteredData = marketData.filter((stock) => trackedSymbols.includes(stock.symbol));
+    // Enrich with 52-week high/low from EOD data (limit concurrent requests)
+    // For KMIALLSHR, we limit EOD fetches to avoid rate limiting
+    const maxEodFetches = selectedIndex === 'KMIALLSHR' ? 50 : 30;
+    const stocksToEnrich = filteredData.slice(0, maxEodFetches);
+    const stocksWithoutEod = filteredData.slice(maxEodFetches);
 
-    // Enrich with 52-week high/low from EOD data
-    const enrichedData = await Promise.all(
-      filteredData.map(async (stock) => {
+    const enrichedStocks = await Promise.all(
+      stocksToEnrich.map(async (stock) => {
         const { data: eodData } = await getCachedEodHistory(stock.symbol);
         const { week_52_high, week_52_low } = calculate52WeekRange(eodData);
         return {
@@ -33,7 +43,16 @@ export async function GET() {
       })
     );
 
-    // Calculate index summary for tracked symbols
+    // Add remaining stocks without EOD data
+    const remainingStocks = stocksWithoutEod.map(stock => ({
+      ...stock,
+      week_52_high: null,
+      week_52_low: null,
+    }));
+
+    const enrichedData = [...enrichedStocks, ...remainingStocks];
+
+    // Calculate index summary for filtered symbols
     let indexSummary = null;
     if (enrichedData.length > 0) {
       const totalVolume = enrichedData.reduce((sum, stock) => sum + (stock.volume || 0), 0);
@@ -61,6 +80,7 @@ export async function GET() {
       data: enrichedData,
       fetched_at,
       is_stale,
+      index: selectedIndex,
     };
 
     if (indexSummary) {

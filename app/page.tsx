@@ -8,6 +8,7 @@ import StaleDataWarning from '@/components/StaleDataWarning';
 import { formatPKR, formatNumber, formatPercent } from '@/utils/formatters';
 import { isMarketOpen, getMarketStatusMessage } from '@/utils/marketHours';
 import { usePSXWebSocket, TickData } from '@/hooks/usePSXWebSocket';
+import { IndexType, KMI_30_STOCKS, KMI_ALL_SHARES_STOCKS, getStockName } from '@/lib/config';
 
 interface Stock {
   symbol: string;
@@ -33,9 +34,11 @@ interface IndexSummary {
   total_stocks: number;
 }
 
+const STOCKS_PER_PAGE = 30;
+
 function DashboardContent() {
   const router = useRouter();
-  const [trackedSymbols, setTrackedSymbols] = useState<string[]>([]);
+  const [selectedIndex, setSelectedIndex] = useState<IndexType>('KMI30');
   const [marketData, setMarketData] = useState<Map<string, Stock>>(new Map());
   const [indexSummary, setIndexSummary] = useState<IndexSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -47,15 +50,21 @@ function DashboardContent() {
   const [portfolioSymbols, setPortfolioSymbols] = useState<string[]>([]);
   const [isStale, setIsStale] = useState(false);
   const [tickCount, setTickCount] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Get symbols for current index
+  const indexStocks = selectedIndex === 'KMI30' ? KMI_30_STOCKS : KMI_ALL_SHARES_STOCKS;
+  const indexSymbols = indexStocks.map(s => s.symbol);
 
   // Handle incoming WebSocket ticks
   const handleTick = useCallback((tick: TickData) => {
     setMarketData((prev) => {
       const existing = prev.get(tick.symbol);
+      const stockName = getStockName(tick.symbol) || existing?.name || tick.symbol;
       const next = new Map(prev);
       next.set(tick.symbol, {
         symbol: tick.symbol,
-        name: existing?.name || tick.symbol,
+        name: stockName,
         ldcp: tick.ldcp,
         open: tick.open,
         high: tick.high,
@@ -75,17 +84,21 @@ function DashboardContent() {
 
   // WebSocket connection for real-time data
   const { isConnected, error: wsError, reconnect } = usePSXWebSocket({
-    symbols: trackedSymbols,
-    enabled: marketStatus.open && trackedSymbols.length > 0,
+    symbols: indexSymbols,
+    enabled: marketStatus.open && indexSymbols.length > 0,
     onTick: handleTick,
   });
 
-  // Fetch tracked symbols on mount
+  // Fetch data on mount and when index changes
   useEffect(() => {
-    fetchTrackedSymbols();
     fetchPortfolioSymbols();
     updateMarketStatus();
   }, []);
+
+  useEffect(() => {
+    fetchInitialData();
+    setCurrentPage(1); // Reset to first page when index changes
+  }, [selectedIndex]);
 
   // Update market status every minute
   useEffect(() => {
@@ -95,42 +108,25 @@ function DashboardContent() {
     return () => clearInterval(statusInterval);
   }, []);
 
-  // Fetch initial data from REST API
-  useEffect(() => {
-    if (trackedSymbols.length > 0) {
-      fetchInitialData();
-    }
-  }, [trackedSymbols]);
-
-  const fetchTrackedSymbols = async () => {
-    try {
-      const response = await fetch('/api/tracked-symbols');
-      if (!response.ok) throw new Error('Failed to fetch tracked symbols');
-      const result = await response.json();
-      const symbols = result.data?.map((s: { symbol: string }) => s.symbol) || [];
-      setTrackedSymbols(symbols);
-    } catch (err) {
-      console.error('Error fetching tracked symbols:', err);
-      setError('Failed to load tracked symbols');
-    }
-  };
-
   const fetchInitialData = async () => {
     try {
       setLoading(true);
       setError(null);
 
-      const response = await fetch('/api/market-watch');
+      const response = await fetch(`/api/market-watch?index=${selectedIndex}`);
       if (!response.ok) throw new Error('Failed to fetch market data');
 
       const result = await response.json();
       const stocks = result.data || [];
 
-      // Filter to only tracked symbols and convert to Map
+      // Convert to Map and enrich with names
       const stockMap = new Map<string, Stock>();
       for (const stock of stocks) {
-        if (trackedSymbols.includes(stock.symbol)) {
-          stockMap.set(stock.symbol, stock);
+        if (indexSymbols.includes(stock.symbol)) {
+          stockMap.set(stock.symbol, {
+            ...stock,
+            name: getStockName(stock.symbol) || stock.name || stock.symbol,
+          });
         }
       }
 
@@ -196,7 +192,9 @@ function DashboardContent() {
   };
 
   const getSortedData = () => {
-    const stocksArray = Array.from(marketData.values());
+    // Filter to only show stocks in the selected index
+    const stocksArray = Array.from(marketData.values()).filter(s => indexSymbols.includes(s.symbol));
+
     if (sortConfig.key) {
       stocksArray.sort((a, b) => {
         let aValue = a[sortConfig.key as keyof Stock];
@@ -225,7 +223,7 @@ function DashboardContent() {
 
   // Calculate index summary from current data
   const calculateIndexSummary = (): IndexSummary | null => {
-    const stocks = Array.from(marketData.values());
+    const stocks = Array.from(marketData.values()).filter(s => indexSymbols.includes(s.symbol));
     if (stocks.length === 0) return null;
 
     const totalVolume = stocks.reduce((sum, s) => sum + (s.volume || 0), 0);
@@ -245,6 +243,14 @@ function DashboardContent() {
   };
 
   const currentSummary = calculateIndexSummary() || indexSummary;
+
+  // Pagination
+  const sortedData = getSortedData();
+  const totalPages = Math.ceil(sortedData.length / STOCKS_PER_PAGE);
+  const paginatedData = sortedData.slice(
+    (currentPage - 1) * STOCKS_PER_PAGE,
+    currentPage * STOCKS_PER_PAGE
+  );
 
   if (loading) {
     return <LoadingSpinner message="Loading market data..." />;
@@ -289,6 +295,16 @@ function DashboardContent() {
           <h2 className="text-3xl font-bold text-white">Market Dashboard</h2>
 
           <div className="flex items-center gap-4">
+            {/* Index Selector */}
+            <select
+              value={selectedIndex}
+              onChange={(e) => setSelectedIndex(e.target.value as IndexType)}
+              className="px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+            >
+              <option value="KMI30">KMI-30 (Top 30)</option>
+              <option value="KMIALLSHR">KMI All Shares ({KMI_ALL_SHARES_STOCKS.length})</option>
+            </select>
+
             {/* WebSocket Status */}
             <div
               className={`px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1 ${
@@ -352,7 +368,7 @@ function DashboardContent() {
 
           <span className="hidden sm:inline">•</span>
           <span className="text-gray-400">
-            Tracking {trackedSymbols.length} symbols
+            Showing {paginatedData.length} of {sortedData.length} stocks
           </span>
         </div>
       </div>
@@ -361,7 +377,9 @@ function DashboardContent() {
         <div className="mb-6 bg-gray-800 rounded-lg shadow p-6">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
             <div className="flex-1">
-              <h3 className="text-sm font-medium text-gray-400 mb-2">Index Performance</h3>
+              <h3 className="text-sm font-medium text-gray-400 mb-2">
+                {selectedIndex === 'KMI30' ? 'KMI-30' : 'KMI All Shares'} Performance
+              </h3>
               <div className="flex items-baseline gap-3">
                 <span
                   className={`text-3xl font-bold ${
@@ -442,14 +460,14 @@ function DashboardContent() {
             </tr>
           </thead>
           <tbody className="bg-gray-800 divide-y divide-gray-700">
-            {marketData.size === 0 ? (
+            {paginatedData.length === 0 ? (
               <tr>
                 <td colSpan={8} className="px-4 py-4 text-center text-gray-400">
                   No market data available
                 </td>
               </tr>
             ) : (
-              getSortedData().map((stock) => {
+              paginatedData.map((stock) => {
                 const isExpanded = expandedSymbol === stock.symbol;
                 const isInPortfolio = portfolioSymbols.includes(stock.symbol);
 
@@ -462,7 +480,10 @@ function DashboardContent() {
                       <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-white">
                         <div className="flex items-center gap-2">
                           <span>{isExpanded ? '▼' : '▶'}</span>
-                          <span>{stock.symbol}</span>
+                          <div>
+                            <div className="font-semibold">{stock.symbol}</div>
+                            <div className="text-xs text-gray-400 truncate max-w-[200px]">{stock.name}</div>
+                          </div>
                         </div>
                       </td>
                       <td
@@ -584,6 +605,45 @@ function DashboardContent() {
           </tbody>
         </table>
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between mt-4 px-2">
+          <div className="text-sm text-gray-400">
+            Page {currentPage} of {totalPages}
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setCurrentPage(1)}
+              disabled={currentPage === 1}
+              className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              First
+            </button>
+            <button
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              Previous
+            </button>
+            <button
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              Next
+            </button>
+            <button
+              onClick={() => setCurrentPage(totalPages)}
+              disabled={currentPage === totalPages}
+              className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              Last
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

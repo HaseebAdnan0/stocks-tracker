@@ -47,6 +47,8 @@ interface Summary {
   };
 }
 
+type ViewMode = 'active' | 'archived';
+
 function PortfolioContent() {
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -59,6 +61,7 @@ function PortfolioContent() {
   const [deletingHolding, setDeletingHolding] = useState<Holding | null>(null);
   const [isSellModalOpen, setIsSellModalOpen] = useState(false);
   const [sellingHolding, setSellingHolding] = useState<Holding | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('active');
 
   useEffect(() => {
     fetchPortfolio();
@@ -140,6 +143,11 @@ function PortfolioContent() {
     }
   };
 
+  // Filter holdings based on view mode
+  const activeHoldings = holdings.filter((h) => h.quantity > 0);
+  const archivedHoldings = holdings.filter((h) => h.quantity === 0);
+  const displayedHoldings = viewMode === 'active' ? activeHoldings : archivedHoldings;
+
   if (loading) {
     return <LoadingSpinner message="Loading your portfolio..." />;
   }
@@ -161,7 +169,7 @@ function PortfolioContent() {
     );
   }
 
-  const hasStaleData = holdings.some((h) => h.current_price === null);
+  const hasStaleData = activeHoldings.some((h) => h.current_price === null);
 
   return (
     <div>
@@ -178,7 +186,7 @@ function PortfolioContent() {
         </button>
       </div>
 
-      {hasStaleData && (
+      {hasStaleData && viewMode === 'active' && (
         <div className="mb-6 bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 flex items-start gap-3">
           <svg className="w-6 h-6 text-yellow-500 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
             <path
@@ -196,7 +204,7 @@ function PortfolioContent() {
         </div>
       )}
 
-      {summary && holdings.length > 0 && (
+      {summary && activeHoldings.length > 0 && (
         <div className="space-y-4 mb-6">
           {/* First row: Investment and Current Value */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -283,95 +291,136 @@ function PortfolioContent() {
         </div>
       ) : (
         <>
-          <div className="overflow-x-auto bg-gray-800 rounded-lg shadow">
-            <table className="min-w-full divide-y divide-gray-700">
-              <thead className="bg-gray-900">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Symbol</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Qty</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Buy Price</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Current Price</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Change %</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Investment</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Current Value</th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">P&L</th>
-                  <th className="px-6 py-3 text-center text-xs font-medium text-gray-300 uppercase">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="bg-gray-800 divide-y divide-gray-700">
-                {holdings.map((holding) => {
-                  const isSold = holding.status === 'sold';
-                  const displayPnL = isSold ? (holding.realized_pl ?? null) : holding.pnl;
-                  const rowOpacity = isSold ? 'opacity-60' : '';
-
-                  return (
-                    <tr key={holding.id} className={`hover:bg-gray-700 transition-colors ${rowOpacity}`}>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white">
-                        <div className="flex items-center gap-2">
-                          <span>{holding.symbol}</span>
-                          <ShariahBadge indices={holding.indices} size="xs" />
-                          {isSold && (
-                            <span className="px-2 py-0.5 text-xs font-semibold bg-gray-600 text-gray-300 rounded">
-                              SOLD
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
-                        {formatNumber(holding.quantity)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
-                        {formatPKR(holding.buy_price)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
-                        {isSold ? '-' : formatPKR(holding.current_price)}
-                      </td>
-                      <td className={`px-6 py-4 whitespace-nowrap text-sm text-right ${isSold ? 'text-gray-500' : getPnLColor(holding.change_percent)}`}>
-                        {isSold ? '-' : formatPercent(holding.change_percent)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
-                        {formatPKR(holding.investment)}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
-                        {isSold ? '-' : formatPKR(holding.current_value)}
-                      </td>
-                      <td className={`px-6 py-4 whitespace-nowrap text-sm text-right font-semibold ${getPnLColor(displayPnL)}`}>
-                        {formatPKR(displayPnL)}
-                        {isSold && <span className="ml-1 text-xs text-gray-400">(Realized)</span>}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-center">
-                        <div className="flex items-center justify-center gap-2">
-                          <button
-                            onClick={() => handleEditClick(holding)}
-                            className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
-                          >
-                            Edit
-                          </button>
-                          {!isSold && (
-                            <button
-                              onClick={() => handleSellClick(holding)}
-                              className="px-3 py-1 bg-orange-600 hover:bg-orange-700 text-white rounded transition-colors"
-                            >
-                              Sell
-                            </button>
-                          )}
-                          <button
-                            onClick={() => handleDeleteClick(holding)}
-                            className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          {/* View Mode Tabs */}
+          <div className="flex gap-2 mb-4">
+            <button
+              onClick={() => setViewMode('active')}
+              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                viewMode === 'active'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              Active ({activeHoldings.length})
+            </button>
+            <button
+              onClick={() => setViewMode('archived')}
+              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                viewMode === 'archived'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              Archived ({archivedHoldings.length})
+            </button>
           </div>
 
-          {/* What If Analysis Section */}
-          {summary && summary.what_if && (
+          {displayedHoldings.length === 0 ? (
+            <div className="text-center py-12 bg-gray-800 rounded-lg">
+              <p className="text-gray-400">
+                {viewMode === 'active'
+                  ? 'No active holdings. Add a new holding or check archived.'
+                  : 'No archived holdings. Sold positions will appear here.'}
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto bg-gray-800 rounded-lg shadow">
+              <table className="min-w-full divide-y divide-gray-700">
+                <thead className="bg-gray-900">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-300 uppercase">Symbol</th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Qty</th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Buy Price</th>
+                    {viewMode === 'active' && (
+                      <>
+                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Current Price</th>
+                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Change %</th>
+                      </>
+                    )}
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Investment</th>
+                    {viewMode === 'active' && (
+                      <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">Current Value</th>
+                    )}
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-300 uppercase">
+                      {viewMode === 'active' ? 'P&L' : 'Realized P&L'}
+                    </th>
+                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-300 uppercase">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-gray-800 divide-y divide-gray-700">
+                  {displayedHoldings.map((holding) => {
+                    const isArchived = holding.quantity === 0;
+                    const displayPnL = isArchived ? (holding.realized_pl ?? null) : holding.pnl;
+
+                    return (
+                      <tr key={holding.id} className="hover:bg-gray-700 transition-colors">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white">
+                          <div className="flex items-center gap-2">
+                            <span>{holding.symbol}</span>
+                            <ShariahBadge indices={holding.indices} size="xs" />
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
+                          {formatNumber(holding.quantity)}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
+                          {formatPKR(holding.buy_price)}
+                        </td>
+                        {viewMode === 'active' && (
+                          <>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
+                              {formatPKR(holding.current_price)}
+                            </td>
+                            <td className={`px-6 py-4 whitespace-nowrap text-sm text-right ${getPnLColor(holding.change_percent)}`}>
+                              {formatPercent(holding.change_percent)}
+                            </td>
+                          </>
+                        )}
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
+                          {formatPKR(holding.investment)}
+                        </td>
+                        {viewMode === 'active' && (
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
+                            {formatPKR(holding.current_value)}
+                          </td>
+                        )}
+                        <td className={`px-6 py-4 whitespace-nowrap text-sm text-right font-semibold ${getPnLColor(displayPnL)}`}>
+                          {formatPKR(displayPnL)}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-center">
+                          <div className="flex items-center justify-center gap-2">
+                            <button
+                              onClick={() => handleEditClick(holding)}
+                              className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
+                            >
+                              Edit
+                            </button>
+                            {viewMode === 'active' && (
+                              <button
+                                onClick={() => handleSellClick(holding)}
+                                className="px-3 py-1 bg-orange-600 hover:bg-orange-700 text-white rounded transition-colors"
+                              >
+                                Sell
+                              </button>
+                            )}
+                            <button
+                              onClick={() => handleDeleteClick(holding)}
+                              className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* What If Analysis Section - Only show for active holdings */}
+          {viewMode === 'active' && summary && summary.what_if && activeHoldings.length > 0 && (
             <div className="mt-8 bg-gray-800 rounded-lg shadow p-6">
               <h3 className="text-2xl font-bold text-white mb-4">What If Analysis</h3>
               <p className="text-gray-400 text-sm mb-6">

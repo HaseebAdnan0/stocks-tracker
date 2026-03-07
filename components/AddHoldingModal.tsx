@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { KMI_30_SYMBOLS } from '@/lib/config';
+import { KMI_ALL_SHARES_STOCKS, isShariahCompliant, isKmi30, StockInfo } from '@/lib/config';
 
 interface AddHoldingModalProps {
   isOpen: boolean;
@@ -26,9 +26,9 @@ export default function AddHoldingModal({
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [filteredSymbols, setFilteredSymbols] = useState<string[]>([]);
+  const [filteredStocks, setFilteredStocks] = useState<StockInfo[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
-  const [showNonKmiWarning, setShowNonKmiWarning] = useState(false);
+  const [showNonShariahWarning, setShowNonShariahWarning] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -41,26 +41,29 @@ export default function AddHoldingModal({
         notes: '',
       });
       setErrors({});
-      setFilteredSymbols([]);
+      setFilteredStocks([]);
       setShowDropdown(false);
-      setShowNonKmiWarning(false);
+      setShowNonShariahWarning(false);
     }
   }, [isOpen, initialSymbol]);
 
   useEffect(() => {
     if (formData.symbol) {
-      const filtered = KMI_30_SYMBOLS.filter((sym) =>
-        sym.toLowerCase().includes(formData.symbol.toLowerCase())
+      const searchTerm = formData.symbol.toLowerCase();
+      const filtered = KMI_ALL_SHARES_STOCKS.filter(
+        (stock) =>
+          stock.symbol.toLowerCase().includes(searchTerm) ||
+          stock.name.toLowerCase().includes(searchTerm)
       );
-      setFilteredSymbols(filtered);
+      setFilteredStocks(filtered);
       setShowDropdown(filtered.length > 0);
-      // Show warning if symbol is entered but not in KMI-30
-      const isKmi30 = KMI_30_SYMBOLS.includes(formData.symbol.toUpperCase() as never);
-      setShowNonKmiWarning(!isKmi30 && formData.symbol.length >= 2);
+      // Show warning if symbol is entered but not in KMI All Shares (not Shariah-compliant)
+      const isShariah = isShariahCompliant(formData.symbol);
+      setShowNonShariahWarning(!isShariah && formData.symbol.length >= 2);
     } else {
-      setFilteredSymbols([...KMI_30_SYMBOLS]);
+      setFilteredStocks([...KMI_ALL_SHARES_STOCKS].slice(0, 20));
       setShowDropdown(false);
-      setShowNonKmiWarning(false);
+      setShowNonShariahWarning(false);
     }
   }, [formData.symbol]);
 
@@ -161,6 +164,17 @@ export default function AddHoldingModal({
     }
   };
 
+  const getStockBadge = (symbol: string) => {
+    if (isKmi30(symbol)) {
+      return (
+        <span className="ml-2 px-1.5 py-0.5 text-xs font-semibold bg-green-600 text-white rounded">
+          KMI-30
+        </span>
+      );
+    }
+    return null;
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -195,35 +209,41 @@ export default function AddHoldingModal({
               name="symbol"
               value={formData.symbol}
               onChange={handleInputChange}
-              onFocus={() => setShowDropdown(filteredSymbols.length > 0 || !formData.symbol)}
+              onFocus={() => setShowDropdown(filteredStocks.length > 0 || !formData.symbol)}
               onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
               className={`w-full px-4 py-3 bg-gray-700 border ${
                 errors.symbol ? 'border-red-500' : 'border-gray-600'
               } rounded text-white focus:outline-none focus:border-blue-500`}
-              placeholder="Enter stock symbol (e.g., LUCK, SYS)"
+              placeholder="Search by symbol or company name"
               autoComplete="off"
             />
             {errors.symbol && <p className="mt-1 text-sm text-red-500">{errors.symbol}</p>}
-            {showNonKmiWarning && !errors.symbol && (
+            {showNonShariahWarning && !errors.symbol && (
               <div className="mt-2 p-2 bg-yellow-900/30 border border-yellow-600/50 rounded flex items-start gap-2">
                 <svg className="w-4 h-4 text-yellow-500 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
                 </svg>
-                <p className="text-xs text-yellow-200">This symbol is not in the KMI-30 Shariah index. You can still add it, but it may not be Shariah-compliant.</p>
+                <p className="text-xs text-yellow-200">This symbol is not in the KMI All Shares Shariah index. It may not be Shariah-compliant.</p>
               </div>
             )}
 
             {showDropdown && (
-              <div className="absolute z-10 w-full mt-1 bg-gray-700 border border-gray-600 rounded shadow-lg max-h-48 overflow-y-auto">
-                {filteredSymbols.length > 0 ? (
-                  filteredSymbols.map((symbol) => (
+              <div className="absolute z-10 w-full mt-1 bg-gray-700 border border-gray-600 rounded shadow-lg max-h-60 overflow-y-auto">
+                {filteredStocks.length > 0 ? (
+                  filteredStocks.slice(0, 30).map((stock) => (
                     <button
-                      key={symbol}
+                      key={stock.symbol}
                       type="button"
-                      onClick={() => handleSymbolSelect(symbol)}
-                      className="w-full text-left px-4 py-3 hover:bg-gray-600 text-white transition-colors"
+                      onClick={() => handleSymbolSelect(stock.symbol)}
+                      className="w-full text-left px-4 py-3 hover:bg-gray-600 text-white transition-colors border-b border-gray-600 last:border-b-0"
                     >
-                      {symbol}
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="font-semibold">{stock.symbol}</span>
+                          {getStockBadge(stock.symbol)}
+                        </div>
+                      </div>
+                      <div className="text-sm text-gray-400 truncate">{stock.name}</div>
                     </button>
                   ))
                 ) : (

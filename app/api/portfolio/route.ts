@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllHoldings, createHolding } from '@/lib/db';
 import { getCachedMarketWatch } from '@/lib/cache';
-import { KMI_30_SYMBOLS } from '@/lib/config';
+import { isKmi30, isShariahCompliant } from '@/lib/config';
 import { getCurrentUser } from '@/lib/middleware';
 
 // Helper to get current price for a symbol
@@ -43,8 +43,10 @@ export async function GET(request: NextRequest) {
         }
 
         const indices: string[] = [];
-        if (KMI_30_SYMBOLS.includes(holding.symbol as never)) {
+        if (isKmi30(holding.symbol)) {
           indices.push('kmi30');
+        } else if (isShariahCompliant(holding.symbol)) {
+          indices.push('kmi_all_share');
         }
 
         return {
@@ -65,6 +67,8 @@ export async function GET(request: NextRequest) {
           created_at: holding.created_at,
           updated_at: holding.updated_at,
           indices,
+          status: holding.status || 'active',
+          realized_pl: holding.realized_pl || 0,
         };
       })
     );
