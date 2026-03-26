@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import AuthGuard from '@/components/AuthGuard';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import ShariahBadge from '@/components/ShariahBadge';
@@ -62,6 +62,7 @@ function PortfolioContent() {
   const [isSellModalOpen, setIsSellModalOpen] = useState(false);
   const [sellingHolding, setSellingHolding] = useState<Holding | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('all');
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetchPortfolio();
@@ -158,6 +159,77 @@ function PortfolioContent() {
       : viewMode === 'active'
       ? sortedActiveHoldings
       : sortedArchivedHoldings;
+
+  // Group holdings by symbol + archived status
+  interface HoldingGroup {
+    key: string;
+    symbol: string;
+    isArchived: boolean;
+    holdings: Holding[];
+    // Combined values
+    totalQty: number;
+    avgBuyPrice: number;
+    totalInvestment: number;
+    totalCurrentValue: number | null;
+    totalPnL: number | null;
+    currentPrice: number | null;
+    changePercent: number | null;
+    indices: string[];
+    totalRealizedPl: number | null;
+  }
+
+  const groupedHoldings: HoldingGroup[] = (() => {
+    const groupMap = new Map<string, Holding[]>();
+    for (const h of displayedHoldings) {
+      const isArchived = h.quantity === 0;
+      const key = `${h.symbol}-${isArchived ? 'archived' : 'active'}`;
+      if (!groupMap.has(key)) groupMap.set(key, []);
+      groupMap.get(key)!.push(h);
+    }
+
+    const groups: HoldingGroup[] = [];
+    for (const [key, holdings] of groupMap) {
+      const isArchived = holdings[0].quantity === 0;
+      const totalQty = holdings.reduce((sum, h) => sum + h.quantity, 0);
+      const totalInvestment = holdings.reduce((sum, h) => sum + h.investment, 0);
+      const avgBuyPrice = totalQty > 0 ? totalInvestment / totalQty : totalInvestment / holdings.length;
+      const totalCurrentValue = isArchived ? null : holdings.reduce((sum, h) => sum + (h.current_value ?? 0), 0);
+      const totalPnL = isArchived
+        ? holdings.reduce((sum, h) => sum + (h.realized_pl ?? 0), 0)
+        : holdings.reduce((sum, h) => sum + (h.pnl ?? 0), 0);
+      const currentPrice = holdings[0].current_price;
+      const changePercent = !isArchived && avgBuyPrice > 0 && currentPrice !== null
+        ? ((currentPrice - avgBuyPrice) / avgBuyPrice) * 100
+        : null;
+      const totalRealizedPl = isArchived ? holdings.reduce((sum, h) => sum + (h.realized_pl ?? 0), 0) : null;
+
+      groups.push({
+        key,
+        symbol: holdings[0].symbol,
+        isArchived,
+        holdings,
+        totalQty,
+        avgBuyPrice,
+        totalInvestment,
+        totalCurrentValue,
+        totalPnL,
+        currentPrice,
+        changePercent,
+        indices: holdings[0].indices,
+        totalRealizedPl,
+      });
+    }
+    return groups;
+  })();
+
+  const toggleGroup = (key: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   if (loading) {
     return <LoadingSpinner message="Loading your portfolio..." />;
@@ -371,74 +443,218 @@ function PortfolioContent() {
                   </tr>
                 </thead>
                 <tbody className="bg-gray-800 divide-y divide-gray-700">
-                  {displayedHoldings.map((holding) => {
-                    const isArchived = holding.quantity === 0;
-                    const displayPnL = isArchived ? (holding.realized_pl ?? null) : holding.pnl;
+                  {groupedHoldings.map((group) => {
+                    const isSingle = group.holdings.length === 1;
+                    const isExpanded = expandedGroups.has(group.key);
+
+                    if (isSingle) {
+                      // Single holding - render as normal row
+                      const holding = group.holdings[0];
+                      const isArchived = holding.quantity === 0;
+                      const displayPnL = isArchived ? (holding.realized_pl ?? null) : holding.pnl;
+
+                      return (
+                        <tr key={holding.id} className="hover:bg-gray-700 transition-colors">
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white">
+                            <div className="flex items-center gap-2">
+                              <span>{holding.symbol}</span>
+                              <ShariahBadge indices={holding.indices} size="xs" />
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
+                            {isArchived ? (
+                              <span className="text-gray-500">SOLD</span>
+                            ) : (
+                              formatNumber(holding.quantity)
+                            )}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
+                            {formatPKR(holding.buy_price)}
+                          </td>
+                          {viewMode !== 'archived' && (
+                            <>
+                              <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
+                                {isArchived ? '—' : formatPKR(holding.current_price)}
+                              </td>
+                              <td className={`px-6 py-4 whitespace-nowrap text-sm text-right ${isArchived ? 'text-gray-500' : getPnLColor(holding.change_percent)}`}>
+                                {isArchived ? '—' : formatPercent(holding.change_percent)}
+                              </td>
+                            </>
+                          )}
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
+                            {formatPKR(holding.investment)}
+                          </td>
+                          {viewMode !== 'archived' && (
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
+                              {isArchived ? '—' : formatPKR(holding.current_value)}
+                            </td>
+                          )}
+                          <td className={`px-6 py-4 whitespace-nowrap text-sm text-right font-semibold ${getPnLColor(displayPnL)}`}>
+                            {formatPKR(displayPnL)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-center">
+                            <div className="flex items-center justify-center gap-2">
+                              <button
+                                onClick={() => handleEditClick(holding)}
+                                className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
+                              >
+                                Edit
+                              </button>
+                              {!isArchived && (
+                                <button
+                                  onClick={() => handleSellClick(holding)}
+                                  className="px-3 py-1 bg-orange-600 hover:bg-orange-700 text-white rounded transition-colors"
+                                >
+                                  Sell
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleDeleteClick(holding)}
+                                className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    // Multi-holding group - render summary row + expandable children
+                    const displayPnL = group.isArchived ? group.totalRealizedPl : group.totalPnL;
 
                     return (
-                      <tr key={holding.id} className="hover:bg-gray-700 transition-colors">
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white">
-                          <div className="flex items-center gap-2">
-                            <span>{holding.symbol}</span>
-                            <ShariahBadge indices={holding.indices} size="xs" />
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
-                          {isArchived ? (
-                            <span className="text-gray-500">SOLD</span>
-                          ) : (
-                            formatNumber(holding.quantity)
-                          )}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
-                          {formatPKR(holding.buy_price)}
-                        </td>
-                        {viewMode !== 'archived' && (
-                          <>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
-                              {isArchived ? '—' : formatPKR(holding.current_price)}
-                            </td>
-                            <td className={`px-6 py-4 whitespace-nowrap text-sm text-right ${isArchived ? 'text-gray-500' : getPnLColor(holding.change_percent)}`}>
-                              {isArchived ? '—' : formatPercent(holding.change_percent)}
-                            </td>
-                          </>
-                        )}
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
-                          {formatPKR(holding.investment)}
-                        </td>
-                        {viewMode !== 'archived' && (
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
-                            {isArchived ? '—' : formatPKR(holding.current_value)}
-                          </td>
-                        )}
-                        <td className={`px-6 py-4 whitespace-nowrap text-sm text-right font-semibold ${getPnLColor(displayPnL)}`}>
-                          {formatPKR(displayPnL)}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-center">
-                          <div className="flex items-center justify-center gap-2">
-                            <button
-                              onClick={() => handleEditClick(holding)}
-                              className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
-                            >
-                              Edit
-                            </button>
-                            {!isArchived && (
-                              <button
-                                onClick={() => handleSellClick(holding)}
-                                className="px-3 py-1 bg-orange-600 hover:bg-orange-700 text-white rounded transition-colors"
+                      <React.Fragment key={group.key}>
+                        {/* Summary row (collapsed) */}
+                        <tr
+                          className="hover:bg-gray-700 transition-colors cursor-pointer"
+                          onClick={() => toggleGroup(group.key)}
+                        >
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white">
+                            <div className="flex items-center gap-2">
+                              <svg
+                                className={`w-4 h-4 text-gray-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
                               >
-                                Sell
-                              </button>
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                              </svg>
+                              <span>{group.symbol}</span>
+                              <ShariahBadge indices={group.indices} size="xs" />
+                              <span className="text-xs text-gray-500 bg-gray-700 px-1.5 py-0.5 rounded">
+                                {group.holdings.length} lots
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
+                            {group.isArchived ? (
+                              <span className="text-gray-500">SOLD</span>
+                            ) : (
+                              formatNumber(group.totalQty)
                             )}
-                            <button
-                              onClick={() => handleDeleteClick(holding)}
-                              className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
+                            {formatPKR(group.avgBuyPrice)}
+                          </td>
+                          {viewMode !== 'archived' && (
+                            <>
+                              <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
+                                {group.isArchived ? '—' : formatPKR(group.currentPrice)}
+                              </td>
+                              <td className={`px-6 py-4 whitespace-nowrap text-sm text-right ${group.isArchived ? 'text-gray-500' : getPnLColor(group.changePercent)}`}>
+                                {group.isArchived ? '—' : formatPercent(group.changePercent)}
+                              </td>
+                            </>
+                          )}
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
+                            {formatPKR(group.totalInvestment)}
+                          </td>
+                          {viewMode !== 'archived' && (
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-300">
+                              {group.isArchived ? '—' : formatPKR(group.totalCurrentValue)}
+                            </td>
+                          )}
+                          <td className={`px-6 py-4 whitespace-nowrap text-sm text-right font-semibold ${getPnLColor(displayPnL)}`}>
+                            {formatPKR(displayPnL)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-center">
+                            <span className="text-gray-500 text-xs">Expand for actions</span>
+                          </td>
+                        </tr>
+
+                        {/* Expanded child rows */}
+                        {isExpanded && group.holdings.map((holding) => {
+                          const isArchived = holding.quantity === 0;
+                          const childPnL = isArchived ? (holding.realized_pl ?? null) : holding.pnl;
+
+                          return (
+                            <tr key={holding.id} className="bg-gray-750 hover:bg-gray-700 transition-colors" style={{ backgroundColor: 'rgba(55, 65, 81, 0.5)' }}>
+                              <td className="px-6 py-3 whitespace-nowrap text-sm text-gray-400">
+                                <div className="flex items-center gap-2 pl-6">
+                                  <span className="text-gray-500">└</span>
+                                  <span>{holding.symbol}</span>
+                                </div>
+                              </td>
+                              <td className="px-6 py-3 whitespace-nowrap text-sm text-right text-gray-400">
+                                {isArchived ? (
+                                  <span className="text-gray-500">SOLD</span>
+                                ) : (
+                                  formatNumber(holding.quantity)
+                                )}
+                              </td>
+                              <td className="px-6 py-3 whitespace-nowrap text-sm text-right text-gray-400">
+                                {formatPKR(holding.buy_price)}
+                              </td>
+                              {viewMode !== 'archived' && (
+                                <>
+                                  <td className="px-6 py-3 whitespace-nowrap text-sm text-right text-gray-400">
+                                    {isArchived ? '—' : formatPKR(holding.current_price)}
+                                  </td>
+                                  <td className={`px-6 py-3 whitespace-nowrap text-sm text-right ${isArchived ? 'text-gray-500' : getPnLColor(holding.change_percent)}`}>
+                                    {isArchived ? '—' : formatPercent(holding.change_percent)}
+                                  </td>
+                                </>
+                              )}
+                              <td className="px-6 py-3 whitespace-nowrap text-sm text-right text-gray-400">
+                                {formatPKR(holding.investment)}
+                              </td>
+                              {viewMode !== 'archived' && (
+                                <td className="px-6 py-3 whitespace-nowrap text-sm text-right text-gray-400">
+                                  {isArchived ? '—' : formatPKR(holding.current_value)}
+                                </td>
+                              )}
+                              <td className={`px-6 py-3 whitespace-nowrap text-sm text-right font-semibold ${getPnLColor(childPnL)}`}>
+                                {formatPKR(childPnL)}
+                              </td>
+                              <td className="px-6 py-3 whitespace-nowrap text-sm text-center">
+                                <div className="flex items-center justify-center gap-2">
+                                  <button
+                                    onClick={() => handleEditClick(holding)}
+                                    className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
+                                  >
+                                    Edit
+                                  </button>
+                                  {!isArchived && (
+                                    <button
+                                      onClick={() => handleSellClick(holding)}
+                                      className="px-3 py-1 bg-orange-600 hover:bg-orange-700 text-white rounded transition-colors"
+                                    >
+                                      Sell
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => handleDeleteClick(holding)}
+                                    className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </React.Fragment>
                     );
                   })}
                 </tbody>
