@@ -38,6 +38,10 @@ interface Summary {
   realized_pl: number;
   unrealized_pl: number;
   total_pl: number;
+  account_balance: number;
+  currently_invested: number;
+  cash_available: number;
+  portfolio_value: number;
   best_performer: { symbol: string; pnl_percent: number } | null;
   worst_performer: { symbol: string; pnl_percent: number } | null;
   what_if: {
@@ -45,6 +49,15 @@ interface Summary {
     '10x': { total_shares: number; total_invested: number; current_value: number; profit_loss: number };
     '100x': { total_shares: number; total_invested: number; current_value: number; profit_loss: number };
   };
+}
+
+interface AccountTransaction {
+  id: number;
+  type: 'deposit' | 'withdraw';
+  amount: number;
+  notes: string | null;
+  date: string;
+  created_at: string;
 }
 
 type ViewMode = 'all' | 'active' | 'archived';
@@ -63,6 +76,14 @@ function PortfolioContent() {
   const [sellingHolding, setSellingHolding] = useState<Holding | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('all');
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [isBalanceModalOpen, setIsBalanceModalOpen] = useState(false);
+  const [balanceModalType, setBalanceModalType] = useState<'deposit' | 'withdraw'>('deposit');
+  const [balanceAmount, setBalanceAmount] = useState('');
+  const [balanceNotes, setBalanceNotes] = useState('');
+  const [balanceDate, setBalanceDate] = useState(new Date().toISOString().split('T')[0]);
+  const [balanceSubmitting, setBalanceSubmitting] = useState(false);
+  const [accountTransactions, setAccountTransactions] = useState<AccountTransaction[]>([]);
+  const [showAccountHistory, setShowAccountHistory] = useState(false);
 
   useEffect(() => {
     fetchPortfolio();
@@ -79,9 +100,10 @@ function PortfolioContent() {
       if (showLoading) setLoading(true);
       setError(null);
 
-      const [holdingsResponse, summaryResponse] = await Promise.all([
+      const [holdingsResponse, summaryResponse, accountResponse] = await Promise.all([
         fetch('/api/portfolio'),
         fetch('/api/portfolio/summary'),
+        fetch('/api/account/balance'),
       ]);
 
       if (!holdingsResponse.ok || !summaryResponse.ok) {
@@ -93,6 +115,11 @@ function PortfolioContent() {
 
       setHoldings(holdingsResult.holdings || []);
       setSummary(summaryResult);
+
+      if (accountResponse.ok) {
+        const accountResult = await accountResponse.json();
+        setAccountTransactions(accountResult.transactions || []);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
       console.error('Error fetching portfolio:', err);
@@ -121,6 +148,58 @@ function PortfolioContent() {
   const handleSellClick = (holding: Holding) => {
     setSellingHolding(holding);
     setIsSellModalOpen(true);
+  };
+
+  const openBalanceModal = (type: 'deposit' | 'withdraw') => {
+    setBalanceModalType(type);
+    setBalanceAmount('');
+    setBalanceNotes('');
+    setBalanceDate(new Date().toISOString().split('T')[0]);
+    setIsBalanceModalOpen(true);
+  };
+
+  const handleBalanceSubmit = async () => {
+    const amount = parseFloat(balanceAmount);
+    if (!amount || amount <= 0) return;
+
+    setBalanceSubmitting(true);
+    try {
+      const response = await fetch('/api/account/balance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: balanceModalType,
+          amount,
+          notes: balanceNotes || null,
+          date: balanceDate,
+        }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        alert(data.error || 'Failed to process transaction');
+        return;
+      }
+
+      setIsBalanceModalOpen(false);
+      await fetchPortfolio();
+    } catch (err) {
+      console.error('Error processing balance transaction:', err);
+      alert('Failed to process transaction');
+    } finally {
+      setBalanceSubmitting(false);
+    }
+  };
+
+  const handleDeleteAccountTransaction = async (id: number) => {
+    try {
+      const response = await fetch(`/api/account/balance?id=${id}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error('Failed to delete');
+      await fetchPortfolio();
+    } catch (err) {
+      console.error('Error deleting account transaction:', err);
+      alert('Failed to delete transaction');
+    }
   };
 
   const handleDeleteConfirm = async () => {
@@ -287,6 +366,99 @@ function PortfolioContent() {
         </div>
       )}
 
+      {/* Account Balance Section - always show if summary exists */}
+      {summary && (
+        <div className="space-y-4 mb-6">
+          {/* Account Balance Row */}
+          <div className="bg-gray-800 rounded-lg p-5 shadow">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-white">Account Overview</h3>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => openBalanceModal('deposit')}
+                  className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-sm rounded flex items-center gap-1 transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                  Deposit
+                </button>
+                <button
+                  onClick={() => openBalanceModal('withdraw')}
+                  className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm rounded flex items-center gap-1 transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                  </svg>
+                  Withdraw
+                </button>
+                <button
+                  onClick={() => setShowAccountHistory(!showAccountHistory)}
+                  className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded transition-colors"
+                >
+                  {showAccountHistory ? 'Hide' : 'History'}
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <p className="text-gray-400 text-xs font-medium mb-1">Total Deposited</p>
+                <p className="text-xl font-bold text-white">{formatPKR(summary.account_balance)}</p>
+              </div>
+              <div>
+                <p className="text-gray-400 text-xs font-medium mb-1">Currently Invested</p>
+                <p className="text-xl font-bold text-blue-400">{formatPKR(summary.currently_invested)}</p>
+              </div>
+              <div>
+                <p className="text-gray-400 text-xs font-medium mb-1">Cash Available</p>
+                <p className={`text-xl font-bold ${summary.cash_available >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {formatPKR(summary.cash_available)}
+                </p>
+              </div>
+              <div>
+                <p className="text-gray-400 text-xs font-medium mb-1">Portfolio Value</p>
+                <p className="text-xl font-bold text-white">{formatPKR(summary.portfolio_value)}</p>
+                <p className="text-xs text-gray-500 mt-0.5">Holdings + Cash</p>
+              </div>
+            </div>
+
+            {/* Account Transaction History */}
+            {showAccountHistory && accountTransactions.length > 0 && (
+              <div className="mt-4 border-t border-gray-700 pt-4">
+                <h4 className="text-sm font-medium text-gray-400 mb-2">Transaction History</h4>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {accountTransactions.map((txn) => (
+                    <div key={txn.id} className="flex items-center justify-between text-sm bg-gray-900 rounded px-3 py-2">
+                      <div className="flex items-center gap-3">
+                        <span className={`font-medium ${txn.type === 'deposit' ? 'text-green-400' : 'text-red-400'}`}>
+                          {txn.type === 'deposit' ? '+' : '-'}{formatPKR(txn.amount)}
+                        </span>
+                        <span className="text-gray-500">{txn.date}</span>
+                        {txn.notes && <span className="text-gray-500 text-xs">{txn.notes}</span>}
+                      </div>
+                      <button
+                        onClick={() => handleDeleteAccountTransaction(txn.id)}
+                        className="text-gray-500 hover:text-red-400 transition-colors"
+                        title="Delete transaction"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {showAccountHistory && accountTransactions.length === 0 && (
+              <div className="mt-4 border-t border-gray-700 pt-4">
+                <p className="text-sm text-gray-500">No transactions yet. Deposit funds to get started.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {summary && activeHoldings.length > 0 && (
         <div className="space-y-4 mb-6">
           {/* First row: Investment and Current Value */}
@@ -294,11 +466,13 @@ function PortfolioContent() {
             <div className="bg-gray-800 rounded-lg p-5 shadow">
               <h3 className="text-gray-400 text-sm font-medium mb-2">Total Investment</h3>
               <p className="text-2xl font-bold text-white">{formatPKR(summary.total_investment)}</p>
+              <p className="text-xs text-gray-500 mt-1">Cost basis of active holdings</p>
             </div>
 
             <div className="bg-gray-800 rounded-lg p-5 shadow">
               <h3 className="text-gray-400 text-sm font-medium mb-2">Current Value</h3>
               <p className="text-2xl font-bold text-white">{formatPKR(summary.total_current_value)}</p>
+              <p className="text-xs text-gray-500 mt-1">Market value of active holdings</p>
             </div>
           </div>
 
@@ -782,6 +956,70 @@ function PortfolioContent() {
         onSuccess={fetchPortfolio}
         holding={sellingHolding}
       />
+
+      {/* Deposit/Withdraw Modal */}
+      {isBalanceModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md mx-4 shadow-xl">
+            <h3 className="text-xl font-bold text-white mb-4">
+              {balanceModalType === 'deposit' ? 'Deposit Funds' : 'Withdraw Funds'}
+            </h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Amount (PKR)</label>
+                <input
+                  type="number"
+                  value={balanceAmount}
+                  onChange={(e) => setBalanceAmount(e.target.value)}
+                  placeholder="Enter amount"
+                  min="0"
+                  step="0.01"
+                  className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Date</label>
+                <input
+                  type="date"
+                  value={balanceDate}
+                  onChange={(e) => setBalanceDate(e.target.value)}
+                  className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">Notes (optional)</label>
+                <input
+                  type="text"
+                  value={balanceNotes}
+                  onChange={(e) => setBalanceNotes(e.target.value)}
+                  placeholder="e.g. Monthly deposit"
+                  className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => setIsBalanceModalOpen(false)}
+                className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBalanceSubmit}
+                disabled={balanceSubmitting || !balanceAmount || parseFloat(balanceAmount) <= 0}
+                className={`flex-1 px-4 py-2 text-white rounded transition-colors ${
+                  balanceModalType === 'deposit'
+                    ? 'bg-green-600 hover:bg-green-700 disabled:bg-green-800'
+                    : 'bg-red-600 hover:bg-red-700 disabled:bg-red-800'
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
+              >
+                {balanceSubmitting ? 'Processing...' : balanceModalType === 'deposit' ? 'Deposit' : 'Withdraw'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

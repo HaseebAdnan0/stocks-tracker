@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAllHoldings } from '@/lib/db';
+import { getAllHoldings, getAccountBalance } from '@/lib/db';
 import { getCachedMarketWatch } from '@/lib/cache';
 import { getCurrentUser } from '@/lib/middleware';
 
@@ -22,6 +22,7 @@ export async function GET(request: NextRequest) {
 
     // Get holdings filtered by user_id
     const holdings = getAllHoldings(user.id);
+    const accountBalance = getAccountBalance(user.id);
 
     if (holdings.length === 0) {
       return NextResponse.json({
@@ -32,6 +33,10 @@ export async function GET(request: NextRequest) {
         realized_pl: 0,
         unrealized_pl: 0,
         total_pl: 0,
+        account_balance: Math.round(accountBalance * 100) / 100,
+        currently_invested: 0,
+        cash_available: Math.round(accountBalance * 100) / 100,
+        portfolio_value: Math.round(accountBalance * 100) / 100,
         best_performer: null,
         worst_performer: null,
         what_if: {
@@ -145,6 +150,12 @@ export async function GET(request: NextRequest) {
       },
     };
 
+    // Account-level metrics
+    const currentlyInvested = totalInvestment; // cost basis of active holdings
+    const cashAvailable = accountBalance - currentlyInvested;
+    // Portfolio value = current market value of holdings + uninvested cash
+    const portfolioValue = totalCurrentValue + Math.max(cashAvailable, 0);
+
     return NextResponse.json({
       total_investment: Math.round(totalInvestment * 100) / 100,
       total_current_value: Math.round(totalCurrentValue * 100) / 100,
@@ -153,6 +164,10 @@ export async function GET(request: NextRequest) {
       realized_pl: Math.round(totalRealizedPL * 100) / 100,
       unrealized_pl: Math.round(totalUnrealizedPL * 100) / 100,
       total_pl: Math.round(totalPL * 100) / 100,
+      account_balance: Math.round(accountBalance * 100) / 100,
+      currently_invested: Math.round(currentlyInvested * 100) / 100,
+      cash_available: Math.round(cashAvailable * 100) / 100,
+      portfolio_value: Math.round(portfolioValue * 100) / 100,
       best_performer: bestPerformer,
       worst_performer: worstPerformer,
       what_if: whatIf,

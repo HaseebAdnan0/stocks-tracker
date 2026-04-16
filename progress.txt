@@ -1,0 +1,1780 @@
+# Progress Log
+
+## Learnings
+(Patterns discovered during implementation)
+
+### US-041: Create Django management command for initial setup
+- Created setup.py management command in core/management/commands/ directory
+- Command structure follows Django BaseCommand pattern with handle() method
+- Uses call_command() to execute other management commands: migrate and seed_holdings
+- call_command('migrate', verbosity=0) runs migrations silently without verbose output
+- call_command('seed_holdings') executes existing seed command with full output
+- Import cache utilities inside try block to avoid import errors: from core.cache_utils import get_cached_market_watch
+- get_cached_market_watch() returns tuple (data, fetched_at, is_stale) - only data needed for success check
+- Windows console encoding (cp1252) doesn't support Unicode characters like ✓ ✗ ⚠ 📈
+- Solution: use ASCII-safe markers [OK], [FAILED], [WARN] instead of Unicode symbols
+- Django styling classes: SUCCESS, ERROR, WARNING, MIGRATE_HEADING, HTTP_INFO for colored output
+- Command output structure: header banner, 3-step progress, final success banner, next steps instructions
+- Try/except blocks around each step allow graceful failure and clear error messages
+- Migration failure stops execution (return early) but market data fetch failure shows warning and continues
+- Pre-fetching market data is optional - if fails, cache will populate on first API request (graceful degradation)
+- Next steps section provides clear copy-paste commands: python manage.py runserver, cd frontend, npm run dev
+- Command is idempotent: can be run multiple times without breaking (seed_holdings already idempotent)
+- Verification passed: ruff check shows no issues, import test successful, command execution works correctly
+- Tested on existing database: migrations no-op, seeds skip existing records, market data fetches successfully
+- Market data fetch returned 479 stocks (full PSX market-watch, not just KMI-30)
+
+### US-040: Add error handling and stale data indicators
+- Created reusable StaleDataWarning component in frontend/src/components/StaleDataWarning.jsx
+- Component accepts props: isStale (boolean), lastUpdated (Date), className (optional string)
+- Warning icon only renders when isStale is true (returns null otherwise for performance)
+- Uses SVG triangle warning icon (Heroicons alert-triangle) colored yellow-500
+- Tooltip implemented with hover state using onMouseEnter/onMouseLeave events
+- Tooltip displays "Data may be stale" + "Last updated: X" with formatRelativeTime helper
+- formatRelativeTime calculates relative time: "just now", "5 minutes ago", "2 hours ago", "3 days ago"
+- Tooltip positioned with absolute z-50 bottom-full to appear above icon without clipping
+- Tooltip arrow created with border-transparent border-t-gray-900 trick for CSS triangle
+- Dashboard component extracts is_stale from API response and passes to StaleDataWarning
+- Dashboard error handling improved with SVG icon, friendly message, and larger retry button
+- Error state changed to show cached data when available: `if (error && marketData.length === 0)`
+- Portfolio component checks for stale data with: `holdings.some(h => h.current_price === null)`
+- Portfolio shows yellow warning banner when any holding has missing current_price
+- Warning banner uses yellow-500/10 background, yellow-500/30 border for subtle appearance
+- StockDetail extracts is_stale and fetched_at from API response (backend already returns these)
+- StockDetail displays warning icon inline with stock symbol and Shariah badge in header
+- All three pages now have consistent error UI: icon, heading, description, action button
+- Error messages are user-friendly and explain possible causes (network issues, server problems)
+- Backend scraper logging already comprehensive: 73 logging statements across 5 fetch functions
+- Backend logs use logger.info for success, logger.warning for non-critical issues, logger.error for failures
+- Backend error handling includes specific exception types: Timeout, ConnectionError, HTTPError
+- Backend returns is_stale flag when cache is used after fetch failure (graceful degradation)
+- Frontend never shows completely broken state: either cached data with warning or friendly error
+- Verification passed: ruff check reports no Python issues, imports work, npm build succeeds
+- Frontend build warning about 649KB chunk size is performance suggestion, not an error
+- StaleDataWarning is pure component with no side effects: only displays UI based on props
+
+### US-038: Add PKR currency formatting utility
+- formatPKR function implemented in frontend/src/utils/formatters.js (lines 6-20)
+- Function signature: formatPKR(value) accepts number|null|undefined and returns formatted string
+- Null/undefined/NaN handling: returns 'PKR 0.00' as default (safe fallback prevents crashes)
+- Uses toLocaleString('en-PK') with minimumFractionDigits: 2, maximumFractionDigits: 2 for consistent formatting
+- Comma separators automatically added by toLocaleString (e.g., 1234567.89 → PKR 1,234,567.89)
+- Negative value handling: checks isNegative flag, calculates absoluteValue, then prefixes with minus (e.g., -PKR 1,500.50)
+- Minus sign placed BEFORE "PKR" prefix as per acceptance criteria (not after)
+- Function is pure and stateless: no side effects, deterministic output for same input
+- Exported as named export: export function formatPKR(value) for consistent import syntax
+- Used in 4 components: Dashboard.jsx, Portfolio.jsx, StockDetail.jsx, PriceChart.jsx
+- Import pattern consistent across all usages: import { formatPKR } from '../utils/formatters'
+- No prop-types or TypeScript types needed (JavaScript project with JSDoc comments)
+- JSDoc comment provides clear documentation: @param, @returns tags for IDE autocomplete
+- Companion utilities in same file: formatNumber, formatPercent, formatMarketCap for consistency
+- formatMarketCap reuses formatPKR for small values (line 69) - good code reuse pattern
+- Testing validated 8 scenarios: standard numbers, large numbers, negative, zero, null, undefined, NaN
+- ESLint passes with no errors or warnings for formatters.js file
+- All acceptance criteria fulfilled: function creation, 2 decimal places, comma separators, PKR prefix, negative handling, null/undefined handling
+- Function handles edge case of 0 correctly: returns 'PKR 0.00' (not just 'PKR 0')
+- Consistent spacing: always one space after 'PKR' prefix for readability
+
+### US-036: Add Shariah compliance badges
+- Created reusable ShariahBadge component in frontend/src/components/ShariahBadge.jsx for consistency across all pages
+- Badge component accepts props: symbol, indices (array), size (xs|sm|md|lg) for flexible usage
+- KMI-30 badge uses green styling: bg-green-500/20, text-green-400, border-green-500/50 (matching PRD spec)
+- KMI All Share badge uses blue styling: bg-blue-500/20, text-blue-400, border-blue-500/50 (future-proofing)
+- Returns null (no badge) for non-Shariah stocks to meet "no badge" requirement
+- Size variants allow appropriate badge sizing for different contexts (xs for tables, sm for detail headers)
+- Added title attribute to badges for accessibility: "Shariah Compliant - KMI-30 Index"
+- Backend portfolio_list_api modified to include indices field for each holding (lines 435-439 in views.py)
+- Follows same pattern as stock_detail_api: check if symbol in KMI_30_SYMBOLS, append "kmi30" to indices array
+- Dashboard.jsx updated: imported ShariahBadge, added badge next to symbol in table (line 432 with size="xs")
+- Since Dashboard filters by index=kmi30, all displayed stocks have ['kmi30'] indices (hardcoded)
+- Portfolio.jsx updated: imported ShariahBadge, added badge next to symbol using holding.indices from API (line 226)
+- StockDetail.jsx refactored: replaced inline badge with ShariahBadge component for consistency (line 143 with size="sm")
+- Removed redundant isKMI30 variable in StockDetail since badge component handles the logic
+- Badge displays inline with flex layout: flex items-center gap-2 for proper spacing
+- whitespace-nowrap class prevents badge text from wrapping in narrow columns
+- All three acceptance criteria fulfilled: badges show on Dashboard, Portfolio, and StockDetail pages
+- Color coding implemented: green for KMI-30, blue for KMI All Share (future-proof)
+- Verification passed: ruff check reports no issues, python manage.py check shows no problems
+- Component is reusable and maintainable: adding new indices only requires updating badge component logic
+
+### US-035: Create indices API endpoint
+- New API endpoint created in views.py as indices_api function
+- Follows existing pattern: @require_http_methods(["GET"]) decorator for GET-only endpoint
+- Returns JsonResponse with {"indices": [...]} structure
+- Each index object contains "name" (string) and "symbols" (list) fields
+- Currently returns single index (KMI-30) but structure is future-proof for multiple indices
+- symbols field directly references KMI_30_SYMBOLS from config.py (no copying needed)
+- URL pattern added to core/urls.py: path("indices/", views.indices_api, name="indices")
+- Logger statement added: logger.info("Fetching indices list") for debugging
+- Function placed before portfolio_summary_api in views.py (logical API grouping)
+- No query parameters needed (simple GET endpoint)
+- Response format matches PRD specification exactly: { indices: [{ name: "KMI-30", symbols: [...] }] }
+- Django check passed with no issues (verified with python manage.py check)
+- ruff check passed with no issues
+- Easy to extend: just append more index dictionaries to the indices list
+
+### US-034: Add dividend history to stock detail page
+- Dividend history integrated into stock_detail_api endpoint in views.py
+- fetch_dividend_history imported from scraper module and called within try/except block for error handling
+- dividend_history added to JSON response with default empty array [] when None (consistent with API contract)
+- Frontend extracts dividend_history from stockData in StockDetail component
+- calculateLast12MonthsDividends() utility function filters dividends by date (last 12 months from today)
+- Date filtering uses JavaScript Date() constructor and setFullYear() to calculate 12 months ago
+- Array.filter() and Array.reduce() pattern used to sum dividend amounts for last 12 months
+- Dividend table displays three columns: Date, Type, Amount (matching acceptance criteria exactly)
+- Date formatting uses toLocaleDateString() with en-US locale and options for "Jan 15, 2024" format
+- Type badges use conditional styling based on dividend type: Cash (green), Bonus (blue), Right (purple)
+- Total dividends banner shown above table with blue styling (bg-blue-500/10, border-blue-500/30)
+- Empty state shows centered icon with two-line message: "No dividend history available" + explanation
+- Table rows have hover effect (hover:bg-gray-700/30) for better interactivity
+- Currency formatting uses existing formatPKR() utility for consistent PKR display
+- Dividend section placed after Fundamentals panel for logical content flow
+- SVG icon used for section header (dollar sign in circle) for visual consistency
+- Empty state SVG icon (document icon) matches the style of other empty states
+- All acceptance criteria fulfilled: table with Date/Type/Amount columns, total last 12 months calculation, empty state handling
+- Code verification passed: ruff check reports no issues, Python imports work with Django setup
+
+### US-033: Implement dividend history scraper
+- fetch_dividend_history(symbol) function follows same dual-format pattern (JSON first, then HTML fallback)
+- Primary source is https://dps.psx.com.pk/company/{SYMBOL} endpoint (same as fundamentals)
+- Dividend fields include: announcement_date, type (Cash/Bonus/Right), amount
+- Return empty list [] if no dividends found (different from other scrapers that return None)
+- Return None only if request fails (network error, timeout, etc.)
+- JSON parsing checks multiple possible keys: "data", "dividends", "dividend_history", "corporate_actions"
+- Filter out non-dividend corporate actions by checking for keywords: cash, bonus, right, dividend, div
+- Skip entries where amount is 0 or negative (invalid dividends)
+- Sort by date descending (reverse=True) to show most recent dividends first
+- HTML parsing looks for tables with dividend-related keywords in headers
+- Strategy 1: Find table by checking header text for keywords (dividend, announcement, corporate action)
+- Strategy 2: Find section headers (h2, h3, h4, div) with dividend keywords, then find next table
+- HTML row parsing extracts: date (first column), type (cell with Cash/Bonus/Right keywords), amount (numeric value)
+- _extract_numeric_from_text() helper used to extract amount from text containing numbers and symbols
+- Default dividend type is "Cash" if not explicitly found in HTML
+- Both JSON and HTML parsers handle missing/malformed data gracefully with try/except around each row
+- logging.info() used for successful parsing, logging.warning() for row-level errors, logging.error() for fatal errors
+- Type hints: Optional[List[Dict[str, Any]]] for return value (None or list of dicts)
+- Function returns [] (empty list) when no dividend data found, maintaining consistency with "no data" case
+
+### US-032: Add fundamentals panel to stock detail page
+- formatMarketCap utility function formats large numbers with K, M, B abbreviations for readability
+- Market cap formatting: >= 1B shows as "PKR X.XXB", >= 1M as "PKR X.XXM", >= 1K as "PKR X.XXK"
+- Fundamentals data extracted from stockData.fundamentals in StockDetail component
+- Grid layout (grid-cols-1 md:grid-cols-2 lg:grid-cols-3) creates responsive fundamentals panel
+- Each metric displayed in individual card with bg-gray-700/50 and border for visual separation
+- Conditional rendering checks for null/undefined values: {value !== null && value !== undefined}
+- "Data unavailable" shown for missing fundamental fields instead of empty/null display
+- 52-Week Range uses market_data instead of fundamentals (week_52_low and week_52_high)
+- formatPKR used for book_value, formatMarketCap for market_cap, plain number for EPS and P/E
+- Yellow warning banner shown if entire fundamentals object is null/missing
+- SVG icons added for visual appeal (bar chart icon for section header, info icon for warning)
+- Fundamentals panel placed after PriceChart component for logical flow
+- All fundamental metrics have descriptive labels (e.g., "Earnings Per Share (EPS)")
+- Sector displayed as text string without special formatting
+- Dividend yield formatted with % symbol (e.g., "5.25%")
+
+### US-031: Implement fundamentals scraper
+- fetch_fundamentals(symbol) function follows same dual-format pattern (JSON first, then HTML fallback)
+- Primary source is https://dps.psx.com.pk/company/{SYMBOL} endpoint
+- Fundamental fields include: eps, pe_ratio, book_value, market_cap, sector, dividend_yield
+- Return dictionary with Optional values (None for missing fields) instead of omitting fields
+- HTML parsing uses BeautifulSoup to search for key-value pairs in table rows, divs, and list items
+- _extract_numeric_from_text() helper function uses regex to extract numbers from text
+- Multiplier support (M=million, B=billion, K=thousand) for market_cap parsing
+- _safe_float_or_none() helper returns None instead of 0.0 for missing/invalid values
+- FundamentalsCache model added to cache_utils imports for 24-hour caching
+- get_cached_fundamentals(symbol) helper function uses CACHE_DURATION["fundamentals"] (24 hours)
+- Cache helper uses FundamentalsCache model with key_field="symbol" for lookups
+- Type annotation Dict[str, Any] required for fundamentals dict to avoid type checker warnings
+- Django imports require Django settings to be configured (use manage.py shell for testing)
+- Regex pattern r'[-+]?\d*\.?\d+' extracts numeric values including decimals and negative numbers
+- HTML parsing gracefully handles missing fields by leaving them as None in result dict
+- If no fundamental data found in HTML, function returns None instead of dict with all None values
+
+### US-030: Add buy price line to chart
+- ReferenceLine component from Recharts draws horizontal or vertical reference lines on charts
+- ReferenceLine with y={value} creates horizontal line at specified y-axis value
+- strokeDasharray="5 5" creates dashed line effect (5px dash, 5px gap)
+- ReferenceLine label prop accepts object with value, position, fill, fontSize, fontWeight for customization
+- Conditional rendering with {buyPrice && <ReferenceLine...>} shows line only when buyPrice exists
+- StockDetail component modified to store buyPrice state from portfolio holdings
+- checkPortfolio function updated to use .find() instead of .some() to get full holding object including buy_price
+- buyPrice prop passed from StockDetail parent to PriceChart child component
+- Yellow color (#FBBF24) provides good contrast against green price line (#10B981)
+- formatPKR utility function works in label prop for consistent currency formatting
+- Reference line positioned at 'right' to avoid overlapping with chart data points
+- If stock not in portfolio, buyPrice is null and reference line is hidden automatically
+
+### US-029: Add price chart to stock detail page
+- Recharts library provides React-friendly charting with ResponsiveContainer for responsive design
+- LineChart component from Recharts requires data array with dataKey pointing to the value field (e.g., dataKey="close")
+- Period selector implemented as button group with active state styling (bg-blue-600 for selected)
+- useCallback hook prevents unnecessary re-renders when passing functions to useEffect dependencies
+- Custom Tooltip component provides styled hover information for chart data points
+- CartesianGrid, XAxis, YAxis components from Recharts enable full chart customization
+- Date formatting in XAxis tickFormatter can adapt based on period (MM/DD for short periods, MM/YY for long periods)
+- Chart data fetched from `/api/stock/<symbol>/history/?period=X` endpoint with period parameter
+- Loading state handled with LoadingSpinner component while fetching chart data
+- Error handling includes retry button for failed data fetches
+- Chart summary section displays period high/low, start/end prices using Math.max/min on chartData array
+- ResponsiveContainer width="100%" height={400} ensures chart adapts to container width
+- Line component with dot={false} and activeDot provides clean chart appearance with hover interaction
+- Domain=['auto', 'auto'] on YAxis allows automatic scaling based on data range
+
+- Django project structure was already initialized before starting US-001
+- All acceptance criteria for US-001 verified:
+  - Django project 'psx_tracker' created with manage.py
+  - Django app 'core' created and registered in INSTALLED_APPS
+  - SQLite database configured in settings.py
+  - CORS headers configured with corsheaders middleware
+  - requirements.txt created with all dependencies
+  - `python manage.py check` runs without errors
+  - All imports (django, requests, bs4, corsheaders) work correctly
+- React frontend with Vite scaffold created in frontend/ directory
+- Tailwind CSS configured with dark theme (bg-gray-900, text-white)
+- Vite proxy configured to forward /api requests to Django backend (localhost:8000)
+- Base Layout component created with header, main content area, and footer
+- Dev server verified working on http://localhost:5173/
+- JSONField is appropriate for cache models to store flexible data structures
+- auto_now=True automatically updates fetched_at timestamp on every save operation
+- unique_together in Meta class is used for composite uniqueness constraints
+- Django shell testing is preferred over standalone imports for verifying models
+
+- Config module should be placed in core/ app directory for application-specific constants
+- All 30 KMI-30 symbols must be included as per PRD specifications
+- Cache durations follow PSX rate limiting requirements (3 min for live data, 24 hrs for historical)
+- USER_AGENT string mimics standard browser to ensure scraper compatibility
+
+- PSX Data Portal may use JSON or HTML format for market-watch endpoint
+- Scraper should handle both JSON and HTML response formats for flexibility
+- Type hints (Optional, List, Dict, Any) improve code readability and IDE support
+- Comprehensive error handling with specific exception types ensures graceful degradation
+- Helper functions (_safe_float, _safe_int) prevent parsing errors from malformed data
+- Logging at INFO and ERROR levels aids debugging without cluttering console
+- Timeout errors are common when scraping external websites and should be handled gracefully
+
+- EOD (End-of-Day) historical data follows same dual-format parsing pattern as market-watch
+- EOD data structures may use different field names (DATE/date/trading_date, CLOSE/close/ltp)
+- Sorting by date ascending is critical for chronological chart display
+- Symbol parameter should be converted to uppercase for consistency with PSX API requirements
+- Helper parsers (_parse_eod_json, _parse_eod_html) keep main function clean and maintainable
+
+- Intraday data follows same dual-format parsing pattern (JSON first, then HTML fallback)
+- Intraday data structures may use different field names (TIMESTAMP/timestamp/time/TIME, PRICE/price/ltp/RATE, VOLUME/volume)
+- Sorting by timestamp ascending is critical for chronological display
+- Symbol parameter should be uppercased for consistency with PSX API requirements
+- Helper parsers (_parse_intraday_json, _parse_intraday_html) keep main function clean and maintainable
+
+- Generic caching utility get_cached_or_fetch() provides flexible caching for any data source
+- Cache utility returns tuple (data, fetched_at, is_stale) for caller to determine data freshness
+- is_stale flag allows graceful degradation when fetch fails but cached data is available
+- Dedicated helper functions (get_cached_market_watch, get_cached_eod_history, get_cached_intraday) simplify common caching patterns
+- Cache models are passed as parameters to allow flexible cache storage (MarketDataCache, EODDataCache, etc.)
+- Lambda functions in helper methods avoid circular import issues with scraper module
+- Django timezone.now() ensures timezone-aware datetime stamps for consistent cache expiration logic
+
+- Django REST API endpoints use @require_http_methods decorator to enforce HTTP method restrictions
+- JsonResponse automatically serializes Python dicts to JSON with proper Content-Type header
+- URL routing should be organized with app-level urls.py included in main project urls.py
+- Query parameters accessed via request.GET.get() with optional default values
+- List comprehension with filtering provides efficient index-based data filtering
+- 52-week high/low calculated from last ~252 trading days (approximately 1 year)
+- Enriching market data with additional fields (52-week range) done via dictionary spreading ({**stock})
+- ISO 8601 datetime formatting via .isoformat() ensures consistent timestamp serialization
+- Graceful error handling returns 503 status with empty data array when market data unavailable
+- Type hints with tuple[Optional[float], Optional[float]] syntax (Python 3.10+) improve code documentation
+
+- URL path parameters captured via <str:symbol> syntax in Django URL patterns
+- Stock detail endpoint combines multiple data sources (market data, EOD history, fundamentals cache)
+- Filter queries for single stock by iterating market_data list and matching symbol field
+- 5 years of EOD data approximately equals 1260 trading days (252 days/year * 5)
+- FundamentalsCache.objects.filter() returns QuerySet, use .first() to get single instance or None
+- List comprehension for indices membership (if symbol in KMI_30_SYMBOLS: indices.append("kmi30"))
+- Overall staleness determined by logical OR of all data source staleness flags
+- Most recent fetched_at timestamp selected by comparing datetime objects with > operator
+- 404 status code with error message returned when stock symbol not found in market data
+- django.urls.resolve() function useful for testing URL routing without starting server
+
+- Period filtering for EOD data uses trading days approximation (252 days/year = ~21 days/month)
+- Period map dictionary provides clean mapping from human-readable periods (1M, 3M, 6M, 1Y, 3Y, 5Y) to trading days
+- JsonResponse with safe=False parameter allows returning JSON arrays directly (not wrapped in object)
+- Default period value handled via request.GET.get("period", "6M") with fallback validation
+- URL pattern ordering in urls.py is important: more specific patterns (stock/<symbol>/history/) should come before less specific (stock/<symbol>/)
+- Tuple unpacking from cache utilities standard pattern even when not all values (fetched_at, is_stale) are used
+
+- Portfolio summary calculations aggregate data from multiple holdings with accumulation pattern
+- Empty portfolio edge case requires explicit handling with zero-valued summary response
+- Best/worst performer logic uses list sorting with key=lambda function on pnl_percent field
+- What-if multiplier calculations use simple multiplication on accumulated totals (10x, 100x)
+- URL pattern ordering critical: "portfolio/summary/" must precede "portfolio/<int:holding_id>/" to prevent path matching conflict
+- Graceful degradation pattern: when current price unavailable, use buy_price for calculations with warning log
+- Nested dictionary structure suitable for what-if analysis with multiple metrics per scenario (actual, 10x, 100x)
+- sorted() with key parameter and reverse=True gives descending order for finding best performer
+
+- Django management commands require proper directory structure: app/management/commands/
+- Management command modules require __init__.py files in management/ and management/commands/ directories
+- Management commands extend BaseCommand and implement handle() method with *args, **options parameters
+- Command idempotency achieved by checking Holding.objects.filter(symbol=symbol).exists() before creation
+- Decimal type (from decimal import Decimal) required for DecimalField values to maintain precision
+- timezone.now() - timedelta(days=X) calculates past dates, .date() extracts date portion
+- self.stdout.write(self.style.SUCCESS/WARNING('message')) provides colored output in management commands
+- Command.help attribute provides help text shown in python manage.py help <command>
+- Running command via python manage.py <command> is the proper way to test Django management commands
+- python manage.py check verifies Django project has no configuration issues
+- ruff check flags unnecessary f-string prefixes (f"string" without placeholders should be "string")
+- Django models cannot be imported standalone via python -c; requires Django initialization (DJANGO_SETTINGS_MODULE)
+
+- react-router-dom provides routing capabilities for React SPAs with BrowserRouter, Routes, Route components
+- useLocation hook from react-router-dom returns current location object with pathname for active route detection
+- Link component from react-router-dom provides SPA navigation without full page refresh
+- Sidebar navigation pattern: fixed aside element on desktop, overlay modal on mobile
+- Active route highlighting uses conditional className with isActivePath() helper function
+- useState hook for managing sidebar open/closed state in mobile view
+- Mobile menu overlay uses fixed position with semi-transparent backdrop (bg-black/50)
+- Hamburger menu icon rendered with SVG path element (three horizontal lines)
+- Dark theme colors: #1a1a2e for main background, #16213e for sidebar/header background
+- Flex layout pattern: parent div with flex, sidebar with fixed width (w-64), main content with flex-1
+- lastUpdated prop passed from App.jsx to Layout component for timestamp display in header
+- formatLastUpdated() function converts timestamp to relative time (X minutes ago, X hours ago, Just now)
+- Mobile-first responsive design: hidden md:flex for desktop sidebar, fixed overlay for mobile
+- Navigation items array with name, path, and icon properties for DRY navigation rendering
+- isActivePath() function handles root path (/) special case to prevent matching all paths starting with /
+
+- Table sorting requires state for sortConfig with key (column name) and direction ('asc'/'desc')
+- Default sort should be set in initial state (e.g., { key: 'symbol', direction: 'asc' })
+- handleSort function toggles direction when clicking same column, resets to 'asc' for new columns
+- getSortedData creates new array with spread operator [...marketData] to avoid mutating original
+- Sort comparator must handle null/undefined values (push to end with early returns)
+- String comparison should be case-insensitive using .toLowerCase() for consistent alphabetical sorting
+- getSortIcon helper returns visual indicator (▲/▼) only for actively sorted column
+- Column headers need onClick handlers and cursor-pointer class for clickable affordance
+- hover:bg-gray-800 transition provides visual feedback on header hover
+- Sort indicators appended to header text using string concatenation (e.g., "Symbol{getSortIcon('symbol')}")
+- Sorted data applied by calling getSortedData() in map function instead of raw state array
+- npm run build validates JavaScript syntax and import correctness without running dev server
+
+---
+
+## Completed User Stories
+
+### US-001: Initialize Django project structure ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create Django project named `psx_tracker`
+- [x] Create Django app named `core`
+- [x] Configure SQLite database in settings
+- [x] Add CORS headers configuration for React frontend
+- [x] Create `requirements.txt` with Django, requests, beautifulsoup4, django-cors-headers
+- [x] Verify `python manage.py runserver` starts without errors
+
+---
+
+### US-002: Initialize React frontend with Tailwind ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create React app in `frontend/` directory using Vite
+- [x] Install and configure Tailwind CSS with dark theme as default
+- [x] Configure proxy to Django backend (localhost:8000)
+- [x] Create base layout component with dark theme styles
+- [x] Verify `npm run dev` starts without errors and shows dark-themed page
+
+**Implementation Details:**
+- Created React app using `npm create vite@latest frontend -- --template react`
+- Installed Tailwind CSS with `npm install -D tailwindcss postcss autoprefixer`
+- Configured tailwind.config.js with content paths and darkMode class
+- Created postcss.config.js with tailwindcss and autoprefixer plugins
+- Updated index.css with Tailwind directives and dark theme base styles
+- Added server.proxy configuration in vite.config.js to forward /api requests to localhost:8000
+- Created Layout component (src/components/Layout.jsx) with dark gray header (bg-gray-800), main content area, and footer
+- Updated App.jsx to use Layout component with welcome content and feature cards
+- Dev server starts successfully on http://localhost:5173/ with dark-themed UI
+
+---
+
+### US-003: Create database models for portfolio holdings ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create `Holding` model with fields: symbol (CharField), quantity (IntegerField), buy_price (DecimalField), buy_date (DateField), broker (CharField, default="HMFS"), notes (TextField, nullable)
+- [x] Add created_at and updated_at timestamps
+- [x] Generate and run migrations
+- [x] Verify model works via Django shell
+
+**Implementation Details:**
+- Created Holding model in core/models.py with all required fields
+- Added DecimalField for buy_price with max_digits=10, decimal_places=2
+- Set broker field default to "HMFS" as specified
+- Made notes field nullable (null=True, blank=True)
+- Added auto_now_add=True for created_at and auto_now=True for updated_at
+- Generated migration with `python manage.py makemigrations` (core/migrations/0001_initial.py)
+- Applied migrations with `python manage.py migrate`
+- Verified model works by creating, saving, querying, and deleting a test holding via Django shell
+- Code passed ruff check without errors
+- Model includes proper __str__ method for admin and debugging
+
+---
+
+### US-004: Create database models for cached market data ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create `MarketDataCache` model with fields: cache_key (CharField, unique), data (JSONField), fetched_at (DateTimeField)
+- [x] Create `EODDataCache` model with fields: symbol (CharField), data (JSONField), fetched_at (DateTimeField), with unique constraint on symbol
+- [x] Create `FundamentalsCache` model with fields: symbol (CharField, unique), data (JSONField), fetched_at (DateTimeField)
+- [x] Generate and run migrations
+
+**Implementation Details:**
+- Created MarketDataCache model with unique cache_key field for generic market data caching
+- Created EODDataCache model with unique_together constraint on symbol field for EOD historical data
+- Created FundamentalsCache model with unique symbol field for fundamental data caching
+- All models use JSONField for flexible data storage and auto_now=True for fetched_at timestamps
+- Generated migration with `python manage.py makemigrations` (core/migrations/0002_fundamentalscache_marketdatacache_eoddatacache.py)
+- Applied migrations with `python manage.py migrate`
+- Verified all three models work by creating, retrieving, and deleting test instances via Django shell
+- Code passed ruff check without errors
+- All models include proper __str__ methods and Meta classes for admin interface
+
+---
+
+### US-005: Create KMI-30 configuration module ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create `config.py` with KMI_30_SYMBOLS list containing all 30 symbols
+- [x] Add CACHE_DURATION settings: market_watch=180 seconds, eod=86400 seconds, fundamentals=86400 seconds
+- [x] Add PSX_MARKET_HOURS config (start: 9:30, end: 15:30, timezone: Asia/Karachi)
+- [x] Add USER_AGENT string for scraping requests
+
+**Implementation Details:**
+- Created core/config.py with all configuration constants
+- KMI_30_SYMBOLS list contains all 30 Shariah-compliant stock symbols from the PRD
+- CACHE_DURATION dictionary defines cache expiration for market_watch (180s), eod (86400s), and fundamentals (86400s)
+- PSX_MARKET_HOURS dictionary contains market start (09:30), end (15:30), and timezone (Asia/Karachi)
+- USER_AGENT string set to standard Chrome browser agent for scraping compatibility
+- Code passed ruff check without errors
+- Verified all imports work correctly via Python shell
+- All 30 symbols confirmed against PRD specifications
+
+---
+
+### US-006: Implement market-watch scraper ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create `scraper.py` module
+- [x] Implement `fetch_market_watch()` function that GETs `https://dps.psx.com.pk/market-watch`
+- [x] Parse response (inspect actual format - JSON or HTML) and extract: symbol, name, ldcp, open, high, low, current, change, change_percent, volume
+- [x] Return list of dictionaries with normalized field names
+- [x] Handle request errors gracefully, return None on failure
+- [x] Add logging for debugging
+
+**Implementation Details:**
+- Created core/scraper.py with fetch_market_watch() function and helper parsers
+- Function fetches data from PSX Data Portal using requests library with USER_AGENT header
+- Implements dual-format parsing: tries JSON first, falls back to HTML with BeautifulSoup
+- JSON parser (_parse_market_watch_json) handles multiple possible JSON structures (data/stocks/MARKET_WATCH keys)
+- HTML parser (_parse_market_watch_html) extracts data from table structure
+- All 10 required fields extracted and normalized: symbol, name, ldcp, open, high, low, current, change, change_percent, volume
+- Returns list of dictionaries with consistent field names regardless of source format
+- Comprehensive error handling for Timeout, ConnectionError, HTTPError, and general exceptions
+- All errors logged with appropriate level (INFO for success, ERROR for failures)
+- Returns None on any failure to enable graceful degradation
+- Helper functions _safe_float() and _safe_int() handle malformed numeric data
+- Code passed ruff check without errors
+- Verified imports work correctly and function handles errors gracefully
+- Type hints added for better code documentation (Optional, List, Dict, Any)
+
+---
+
+### US-007: Implement EOD historical data scraper ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Implement `fetch_eod_history(symbol)` function that GETs `https://dps.psx.com.pk/timeseries/eod/{SYMBOL}`
+- [x] Parse response and extract: date, open, high, low, close, volume
+- [x] Return list of dictionaries sorted by date ascending
+- [x] Handle request errors gracefully, return None on failure
+
+**Implementation Details:**
+- Added fetch_eod_history(symbol) function to core/scraper.py following established patterns
+- Function fetches EOD historical data from PSX timeseries endpoint with symbol parameter uppercased
+- Implements dual-format parsing: tries JSON first, falls back to HTML with BeautifulSoup
+- JSON parser (_parse_eod_json) handles multiple possible JSON structures (data/timeseries/eod/history keys)
+- HTML parser (_parse_eod_html) extracts data from table structure with minimum 6 columns
+- All 6 required fields extracted and normalized: date, open, high, low, close, volume
+- Returns list of dictionaries sorted by date ascending for chronological chart display
+- Comprehensive error handling for Timeout, ConnectionError, HTTPError, and general exceptions
+- All errors logged with appropriate level (INFO for success, ERROR for failures)
+- Returns None on any failure to enable graceful degradation
+- Reuses existing _safe_float() and _safe_int() helper functions for numeric parsing
+- Code passed ruff check without errors
+- Verified imports work correctly via python -c import test
+- Type hints added for better code documentation (Optional, List, Dict, Any)
+- Function includes comprehensive docstring with example usage
+
+---
+
+### US-008: Implement intraday data scraper ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Implement `fetch_intraday(symbol)` function that GETs `https://dps.psx.com.pk/timeseries/int/{SYMBOL}`
+- [x] Parse response and extract: timestamp, price, volume
+- [x] Return list of dictionaries sorted by timestamp ascending
+- [x] Handle request errors gracefully, return None on failure
+
+**Implementation Details:**
+- Added fetch_intraday(symbol) function to core/scraper.py following established patterns
+- Function fetches intraday time series data from PSX timeseries endpoint with symbol parameter uppercased
+- Implements dual-format parsing: tries JSON first, falls back to HTML with BeautifulSoup
+- JSON parser (_parse_intraday_json) handles multiple possible JSON structures (data/timeseries/intraday/int keys)
+- HTML parser (_parse_intraday_html) extracts data from table structure with minimum 3 columns
+- All 3 required fields extracted and normalized: timestamp, price, volume
+- Returns list of dictionaries sorted by timestamp ascending for chronological display
+- Comprehensive error handling for Timeout, ConnectionError, HTTPError, and general exceptions
+- All errors logged with appropriate level (INFO for success, ERROR for failures)
+- Returns None on any failure to enable graceful degradation
+- Reuses existing _safe_float() and _safe_int() helper functions for numeric parsing
+- Code passed ruff check without errors
+- Verified imports work correctly via python -c import test
+- Type hints added for better code documentation (Optional, List, Dict, Any)
+- Function includes comprehensive docstring with example usage
+
+---
+
+### US-009: Implement caching layer for scraped data ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Implement `get_cached_or_fetch(cache_key, fetch_fn, max_age_seconds)` utility
+- [x] Check `MarketDataCache` for valid cached data (fetched_at within max_age)
+- [x] If cache miss or stale, call fetch_fn and update cache
+- [x] Return tuple: (data, fetched_at, is_stale) where is_stale=True if using expired cache due to fetch failure
+- [x] Apply caching to market-watch (3 min), EOD (24 hr), fundamentals (24 hr)
+
+**Implementation Details:**
+- Created core/cache_utils.py with generic caching utilities
+- Implemented get_cached_or_fetch() as flexible caching wrapper accepting cache_key, fetch_fn, max_age_seconds, and cache_model parameters
+- Function checks cache freshness using timezone-aware datetime comparisons (fetched_at >= now - timedelta)
+- Cache hit: returns cached data with is_stale=False
+- Cache miss or stale: calls fetch_fn to get fresh data, updates cache, returns is_stale=False
+- Fetch failure with stale cache available: returns stale data with is_stale=True for graceful degradation
+- Fetch failure with no cache: returns None, None, False
+- Comprehensive error handling with try-except blocks and logging at INFO/WARNING/ERROR levels
+- Created helper functions for common use cases:
+  - get_cached_market_watch(): 3-minute caching with MarketDataCache
+  - get_cached_eod_history(symbol): 24-hour caching with EODDataCache
+  - get_cached_intraday(symbol): 3-minute caching with MarketDataCache
+- Lambda functions used in helpers to avoid circular imports with scraper module
+- All functions include type hints (Tuple, Optional, Callable, Any) and comprehensive docstrings
+- Code passed ruff check without errors
+- Verified imports work correctly via Django shell (python manage.py shell)
+- Tested all three cache scenarios: cache miss (fresh fetch), cache hit (return cached), and failed fetch with stale cache fallback
+
+---
+
+### US-010: Create market-watch API endpoint ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create `/api/market-watch/` endpoint (GET)
+- [x] Accept optional `?index=kmi30` query param to filter by index
+- [x] Return JSON: `{ data: [...stocks], fetched_at: timestamp, is_stale: boolean }`
+- [x] Calculate 52-week high/low from cached EOD data if available
+- [x] Include company name from market-watch response
+
+**Implementation Details:**
+- Created market_watch_api view function in core/views.py with @require_http_methods(["GET"]) decorator
+- Created core/urls.py with URL pattern for "market-watch/" endpoint
+- Updated psx_tracker/urls.py to include core.urls at "api/" prefix, resulting in /api/market-watch/ endpoint
+- Implemented calculate_52_week_range() helper function that:
+  - Takes EOD data list and extracts last ~252 trading days (approximately 1 year)
+  - Calculates max(high) and min(low) from the filtered data
+  - Returns tuple (week_52_high, week_52_low) or (None, None) for insufficient data
+- Market watch API logic:
+  - Calls get_cached_market_watch() to retrieve market data with 3-minute caching
+  - Returns 503 error with empty data array if market data unavailable
+  - Filters data to KMI_30_SYMBOLS when ?index=kmi30 query parameter provided
+  - Enriches each stock with 52-week high/low by fetching EOD data via get_cached_eod_history(symbol)
+  - Returns JsonResponse with structure: {data: [...], fetched_at: ISO_timestamp, is_stale: boolean}
+- Company name automatically included from market-watch scraper response (field: "name")
+- Django check passes without issues
+- URL routing verified: /api/market-watch/ correctly mapped to market_watch_api view
+- Code passed ruff check without errors
+- All imports verified working via Django setup
+- Type hints added for better code documentation (Optional, tuple syntax)
+
+---
+
+### US-011: Create stock detail API endpoint ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create `/api/stock/<symbol>/` endpoint (GET)
+- [x] Return current market data for the symbol
+- [x] Return EOD history (last 5 years)
+- [x] Return fundamentals (if available in cache)
+- [x] Return indices the stock belongs to (kmi30, etc.)
+- [x] Return JSON with all data combined
+
+**Implementation Details:**
+- Created stock_detail_api view function in core/views.py with @require_http_methods(["GET"]) decorator
+- Added URL pattern "stock/<str:symbol>/" in core/urls.py, resulting in /api/stock/<symbol>/ endpoint
+- Imported FundamentalsCache model for fundamentals data retrieval
+- Stock detail API logic:
+  - Uppercases symbol parameter for consistency
+  - Fetches market-watch data and searches for specific stock by symbol
+  - Returns 404 error if stock symbol not found in market data
+  - Fetches EOD history and filters to last 1260 trading days (approximately 5 years)
+  - Queries FundamentalsCache for fundamentals data (returns None if not available)
+  - Determines indices membership by checking if symbol in KMI_30_SYMBOLS list
+  - Calculates overall staleness as logical OR of market and EOD staleness
+  - Selects most recent fetched_at timestamp from all data sources
+  - Returns comprehensive JSON with: symbol, current_data, eod_history, fundamentals, indices, fetched_at, is_stale
+- Comprehensive error handling with try-except for fundamentals cache queries
+- Logging added at INFO level for debugging (stock fetch, fundamentals cache hit)
+- Django check passes without issues
+- URL routing verified: /api/stock/LUCK/ correctly resolves to stock_detail_api with {'symbol': 'LUCK'}
+- Code passed ruff check without errors
+- Type hints and docstrings added for better code documentation
+
+---
+
+### US-012: Create stock history API endpoint ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create `/api/stock/<symbol>/history/` endpoint (GET)
+- [x] Accept optional `?period=6M` param (1M, 3M, 6M, 1Y, 3Y, 5Y, default 6M)
+- [x] Filter EOD data to requested period
+- [x] Return JSON array of {date, open, high, low, close, volume}
+
+**Implementation Details:**
+- Created stock_history_api view function in core/views.py with @require_http_methods(["GET"]) decorator
+- Added URL pattern "stock/<str:symbol>/history/" in core/urls.py, resulting in /api/stock/<symbol>/history/ endpoint
+- Implemented period filtering logic with period_map dictionary:
+  - 1M: 21 trading days, 3M: 63 days, 6M: 126 days, 1Y: 252 days, 3Y: 756 days, 5Y: 1260 days
+  - Based on ~252 trading days per year approximation
+  - Invalid periods default to 6M with warning log
+- Stock history API logic:
+  - Uppercases symbol parameter for consistency
+  - Extracts period query parameter with default value "6M"
+  - Validates period against period_map, defaults to 6M if invalid
+  - Fetches EOD data using get_cached_eod_history(symbol)
+  - Returns 404 error if no EOD data available for symbol
+  - Filters data to last N trading days based on period (-num_days slice)
+  - Returns JSON array directly using JsonResponse with safe=False
+- Comprehensive logging at INFO and WARNING levels for debugging
+- Django check passes without issues
+- URL routing verified: /api/stock/LUCK/history/ correctly resolves to stock_history_api
+- Code passed ruff check without errors
+- Type hints and comprehensive docstring added with example response
+
+- Portfolio CRUD endpoints require @csrf_exempt decorator for POST/PUT/DELETE methods from frontend
+- Helper function get_current_price() encapsulates logic for fetching current price from cached market data
+- P&L calculations done inline for each holding: investment = buy_price * quantity, pnl = current_value - investment
+- Percentage calculations use formula: (change / original * 100) with zero-division protection
+- Symbol validation against market data ensures only valid symbols can be added to portfolio
+- POST endpoint validates all required fields (symbol, quantity, buy_price, buy_date) before creating holding
+- PUT endpoint allows partial updates - only provided fields are updated, others remain unchanged
+- DELETE endpoint returns 204 No Content status code on successful deletion
+- All numeric values rounded to 2 decimal places for consistency
+- Created and updated timestamps automatically included in all responses via model auto_now fields
+- JsonResponse with status parameter allows returning non-200 status codes (201, 204, 400, 404, 500)
+- Decimal type used for buy_price to maintain precision in financial calculations
+- datetime.strptime() validates date format (YYYY-MM-DD) before saving to database
+- Comprehensive validation at API level (field presence, types, ranges) before database operations
+- try-except blocks with specific error messages provide clear feedback for validation failures
+
+---
+
+## Completed User Stories
+
+### US-001: Initialize Django project structure ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create Django project named `psx_tracker`
+- [x] Create Django app named `core`
+- [x] Configure SQLite database in settings
+- [x] Add CORS headers configuration for React frontend
+- [x] Create `requirements.txt` with Django, requests, beautifulsoup4, django-cors-headers
+- [x] Verify `python manage.py runserver` starts without errors
+
+---
+
+### US-002: Initialize React frontend with Tailwind ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create React app in `frontend/` directory using Vite
+- [x] Install and configure Tailwind CSS with dark theme as default
+- [x] Configure proxy to Django backend (localhost:8000)
+- [x] Create base layout component with dark theme styles
+- [x] Verify `npm run dev` starts without errors and shows dark-themed page
+
+**Implementation Details:**
+- Created React app using `npm create vite@latest frontend -- --template react`
+- Installed Tailwind CSS with `npm install -D tailwindcss postcss autoprefixer`
+- Configured tailwind.config.js with content paths and darkMode class
+- Created postcss.config.js with tailwindcss and autoprefixer plugins
+- Updated index.css with Tailwind directives and dark theme base styles
+- Added server.proxy configuration in vite.config.js to forward /api requests to localhost:8000
+- Created Layout component (src/components/Layout.jsx) with dark gray header (bg-gray-800), main content area, and footer
+- Updated App.jsx to use Layout component with welcome content and feature cards
+- Dev server starts successfully on http://localhost:5173/ with dark-themed UI
+
+---
+
+### US-003: Create database models for portfolio holdings ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create `Holding` model with fields: symbol (CharField), quantity (IntegerField), buy_price (DecimalField), buy_date (DateField), broker (CharField, default="HMFS"), notes (TextField, nullable)
+- [x] Add created_at and updated_at timestamps
+- [x] Generate and run migrations
+- [x] Verify model works via Django shell
+
+**Implementation Details:**
+- Created Holding model in core/models.py with all required fields
+- Added DecimalField for buy_price with max_digits=10, decimal_places=2
+- Set broker field default to "HMFS" as specified
+- Made notes field nullable (null=True, blank=True)
+- Added auto_now_add=True for created_at and auto_now=True for updated_at
+- Generated migration with `python manage.py makemigrations` (core/migrations/0001_initial.py)
+- Applied migrations with `python manage.py migrate`
+- Verified model works by creating, saving, querying, and deleting a test holding via Django shell
+- Code passed ruff check without errors
+- Model includes proper __str__ method for admin and debugging
+
+---
+
+### US-004: Create database models for cached market data ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create `MarketDataCache` model with fields: cache_key (CharField, unique), data (JSONField), fetched_at (DateTimeField)
+- [x] Create `EODDataCache` model with fields: symbol (CharField), data (JSONField), fetched_at (DateTimeField), with unique constraint on symbol
+- [x] Create `FundamentalsCache` model with fields: symbol (CharField, unique), data (JSONField), fetched_at (DateTimeField)
+- [x] Generate and run migrations
+
+**Implementation Details:**
+- Created MarketDataCache model with unique cache_key field for generic market data caching
+- Created EODDataCache model with unique_together constraint on symbol field for EOD historical data
+- Created FundamentalsCache model with unique symbol field for fundamental data caching
+- All models use JSONField for flexible data storage and auto_now=True for fetched_at timestamps
+- Generated migration with `python manage.py makemigrations` (core/migrations/0002_fundamentalscache_marketdatacache_eoddatacache.py)
+- Applied migrations with `python manage.py migrate`
+- Verified all three models work by creating, retrieving, and deleting test instances via Django shell
+- Code passed ruff check without errors
+- All models include proper __str__ methods and Meta classes for admin interface
+
+---
+
+### US-005: Create KMI-30 configuration module ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create `config.py` with KMI_30_SYMBOLS list containing all 30 symbols
+- [x] Add CACHE_DURATION settings: market_watch=180 seconds, eod=86400 seconds, fundamentals=86400 seconds
+- [x] Add PSX_MARKET_HOURS config (start: 9:30, end: 15:30, timezone: Asia/Karachi)
+- [x] Add USER_AGENT string for scraping requests
+
+**Implementation Details:**
+- Created core/config.py with all configuration constants
+- KMI_30_SYMBOLS list contains all 30 Shariah-compliant stock symbols from the PRD
+- CACHE_DURATION dictionary defines cache expiration for market_watch (180s), eod (86400s), and fundamentals (86400s)
+- PSX_MARKET_HOURS dictionary contains market start (09:30), end (15:30), and timezone (Asia/Karachi)
+- USER_AGENT string set to standard Chrome browser agent for scraping compatibility
+- Code passed ruff check without errors
+- Verified all imports work correctly via Python shell
+- All 30 symbols confirmed against PRD specifications
+
+---
+
+### US-006: Implement market-watch scraper ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create `scraper.py` module
+- [x] Implement `fetch_market_watch()` function that GETs `https://dps.psx.com.pk/market-watch`
+- [x] Parse response (inspect actual format - JSON or HTML) and extract: symbol, name, ldcp, open, high, low, current, change, change_percent, volume
+- [x] Return list of dictionaries with normalized field names
+- [x] Handle request errors gracefully, return None on failure
+- [x] Add logging for debugging
+
+**Implementation Details:**
+- Created core/scraper.py with fetch_market_watch() function and helper parsers
+- Function fetches data from PSX Data Portal using requests library with USER_AGENT header
+- Implements dual-format parsing: tries JSON first, falls back to HTML with BeautifulSoup
+- JSON parser (_parse_market_watch_json) handles multiple possible JSON structures (data/stocks/MARKET_WATCH keys)
+- HTML parser (_parse_market_watch_html) extracts data from table structure
+- All 10 required fields extracted and normalized: symbol, name, ldcp, open, high, low, current, change, change_percent, volume
+- Returns list of dictionaries with consistent field names regardless of source format
+- Comprehensive error handling for Timeout, ConnectionError, HTTPError, and general exceptions
+- All errors logged with appropriate level (INFO for success, ERROR for failures)
+- Returns None on any failure to enable graceful degradation
+- Helper functions _safe_float() and _safe_int() handle malformed numeric data
+- Code passed ruff check without errors
+- Verified imports work correctly and function handles errors gracefully
+- Type hints added for better code documentation (Optional, List, Dict, Any)
+
+---
+
+### US-007: Implement EOD historical data scraper ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Implement `fetch_eod_history(symbol)` function that GETs `https://dps.psx.com.pk/timeseries/eod/{SYMBOL}`
+- [x] Parse response and extract: date, open, high, low, close, volume
+- [x] Return list of dictionaries sorted by date ascending
+- [x] Handle request errors gracefully, return None on failure
+
+**Implementation Details:**
+- Added fetch_eod_history(symbol) function to core/scraper.py following established patterns
+- Function fetches EOD historical data from PSX timeseries endpoint with symbol parameter uppercased
+- Implements dual-format parsing: tries JSON first, falls back to HTML with BeautifulSoup
+- JSON parser (_parse_eod_json) handles multiple possible JSON structures (data/timeseries/eod/history keys)
+- HTML parser (_parse_eod_html) extracts data from table structure with minimum 6 columns
+- All 6 required fields extracted and normalized: date, open, high, low, close, volume
+- Returns list of dictionaries sorted by date ascending for chronological chart display
+- Comprehensive error handling for Timeout, ConnectionError, HTTPError, and general exceptions
+- All errors logged with appropriate level (INFO for success, ERROR for failures)
+- Returns None on any failure to enable graceful degradation
+- Reuses existing _safe_float() and _safe_int() helper functions for numeric parsing
+- Code passed ruff check without errors
+- Verified imports work correctly via python -c import test
+- Type hints added for better code documentation (Optional, List, Dict, Any)
+- Function includes comprehensive docstring with example usage
+
+---
+
+### US-008: Implement intraday data scraper ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Implement `fetch_intraday(symbol)` function that GETs `https://dps.psx.com.pk/timeseries/int/{SYMBOL}`
+- [x] Parse response and extract: timestamp, price, volume
+- [x] Return list of dictionaries sorted by timestamp ascending
+- [x] Handle request errors gracefully, return None on failure
+
+**Implementation Details:**
+- Added fetch_intraday(symbol) function to core/scraper.py following established patterns
+- Function fetches intraday time series data from PSX timeseries endpoint with symbol parameter uppercased
+- Implements dual-format parsing: tries JSON first, falls back to HTML with BeautifulSoup
+- JSON parser (_parse_intraday_json) handles multiple possible JSON structures (data/timeseries/intraday/int keys)
+- HTML parser (_parse_intraday_html) extracts data from table structure with minimum 3 columns
+- All 3 required fields extracted and normalized: timestamp, price, volume
+- Returns list of dictionaries sorted by timestamp ascending for chronological display
+- Comprehensive error handling for Timeout, ConnectionError, HTTPError, and general exceptions
+- All errors logged with appropriate level (INFO for success, ERROR for failures)
+- Returns None on any failure to enable graceful degradation
+- Reuses existing _safe_float() and _safe_int() helper functions for numeric parsing
+- Code passed ruff check without errors
+- Verified imports work correctly via python -c import test
+- Type hints added for better code documentation (Optional, List, Dict, Any)
+- Function includes comprehensive docstring with example usage
+
+---
+
+### US-009: Implement caching layer for scraped data ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Implement `get_cached_or_fetch(cache_key, fetch_fn, max_age_seconds)` utility
+- [x] Check `MarketDataCache` for valid cached data (fetched_at within max_age)
+- [x] If cache miss or stale, call fetch_fn and update cache
+- [x] Return tuple: (data, fetched_at, is_stale) where is_stale=True if using expired cache due to fetch failure
+- [x] Apply caching to market-watch (3 min), EOD (24 hr), fundamentals (24 hr)
+
+**Implementation Details:**
+- Created core/cache_utils.py with generic caching utilities
+- Implemented get_cached_or_fetch() as flexible caching wrapper accepting cache_key, fetch_fn, max_age_seconds, and cache_model parameters
+- Function checks cache freshness using timezone-aware datetime comparisons (fetched_at >= now - timedelta)
+- Cache hit: returns cached data with is_stale=False
+- Cache miss or stale: calls fetch_fn to get fresh data, updates cache, returns is_stale=False
+- Fetch failure with stale cache available: returns stale data with is_stale=True for graceful degradation
+- Fetch failure with no cache: returns None, None, False
+- Comprehensive error handling with try-except blocks and logging at INFO/WARNING/ERROR levels
+- Created helper functions for common use cases:
+  - get_cached_market_watch(): 3-minute caching with MarketDataCache
+  - get_cached_eod_history(symbol): 24-hour caching with EODDataCache
+  - get_cached_intraday(symbol): 3-minute caching with MarketDataCache
+- Lambda functions used in helpers to avoid circular imports with scraper module
+- All functions include type hints (Tuple, Optional, Callable, Any) and comprehensive docstrings
+- Code passed ruff check without errors
+- Verified imports work correctly via Django shell (python manage.py shell)
+- Tested all three cache scenarios: cache miss (fresh fetch), cache hit (return cached), and failed fetch with stale cache fallback
+
+---
+
+### US-010: Create market-watch API endpoint ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create `/api/market-watch/` endpoint (GET)
+- [x] Accept optional `?index=kmi30` query param to filter by index
+- [x] Return JSON: `{ data: [...stocks], fetched_at: timestamp, is_stale: boolean }`
+- [x] Calculate 52-week high/low from cached EOD data if available
+- [x] Include company name from market-watch response
+
+**Implementation Details:**
+- Created market_watch_api view function in core/views.py with @require_http_methods(["GET"]) decorator
+- Created core/urls.py with URL pattern for "market-watch/" endpoint
+- Updated psx_tracker/urls.py to include core.urls at "api/" prefix, resulting in /api/market-watch/ endpoint
+- Implemented calculate_52_week_range() helper function that:
+  - Takes EOD data list and extracts last ~252 trading days (approximately 1 year)
+  - Calculates max(high) and min(low) from the filtered data
+  - Returns tuple (week_52_high, week_52_low) or (None, None) for insufficient data
+- Market watch API logic:
+  - Calls get_cached_market_watch() to retrieve market data with 3-minute caching
+  - Returns 503 error with empty data array if market data unavailable
+  - Filters data to KMI_30_SYMBOLS when ?index=kmi30 query parameter provided
+  - Enriches each stock with 52-week high/low by fetching EOD data via get_cached_eod_history(symbol)
+  - Returns JsonResponse with structure: {data: [...], fetched_at: ISO_timestamp, is_stale: boolean}
+- Company name automatically included from market-watch scraper response (field: "name")
+- Django check passes without issues
+- URL routing verified: /api/market-watch/ correctly mapped to market_watch_api view
+- Code passed ruff check without errors
+- All imports verified working via Django setup
+- Type hints added for better code documentation (Optional, tuple syntax)
+
+---
+
+### US-011: Create stock detail API endpoint ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create `/api/stock/<symbol>/` endpoint (GET)
+- [x] Return current market data for the symbol
+- [x] Return EOD history (last 5 years)
+- [x] Return fundamentals (if available in cache)
+- [x] Return indices the stock belongs to (kmi30, etc.)
+- [x] Return JSON with all data combined
+
+**Implementation Details:**
+- Created stock_detail_api view function in core/views.py with @require_http_methods(["GET"]) decorator
+- Added URL pattern "stock/<str:symbol>/" in core/urls.py, resulting in /api/stock/<symbol>/ endpoint
+- Imported FundamentalsCache model for fundamentals data retrieval
+- Stock detail API logic:
+  - Uppercases symbol parameter for consistency
+  - Fetches market-watch data and searches for specific stock by symbol
+  - Returns 404 error if stock symbol not found in market data
+  - Fetches EOD history and filters to last 1260 trading days (approximately 5 years)
+  - Queries FundamentalsCache for fundamentals data (returns None if not available)
+  - Determines indices membership by checking if symbol in KMI_30_SYMBOLS list
+  - Calculates overall staleness as logical OR of market and EOD staleness
+  - Selects most recent fetched_at timestamp from all data sources
+  - Returns comprehensive JSON with: symbol, current_data, eod_history, fundamentals, indices, fetched_at, is_stale
+- Comprehensive error handling with try-except for fundamentals cache queries
+- Logging added at INFO level for debugging (stock fetch, fundamentals cache hit)
+- Django check passes without issues
+- URL routing verified: /api/stock/LUCK/ correctly resolves to stock_detail_api with {'symbol': 'LUCK'}
+- Code passed ruff check without errors
+- Type hints and docstrings added for better code documentation
+
+---
+
+### US-012: Create stock history API endpoint ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create `/api/stock/<symbol>/history/` endpoint (GET)
+- [x] Accept optional `?period=6M` param (1M, 3M, 6M, 1Y, 3Y, 5Y, default 6M)
+- [x] Filter EOD data to requested period
+- [x] Return JSON array of {date, open, high, low, close, volume}
+
+**Implementation Details:**
+- Created stock_history_api view function in core/views.py with @require_http_methods(["GET"]) decorator
+- Added URL pattern "stock/<str:symbol>/history/" in core/urls.py, resulting in /api/stock/<symbol>/history/ endpoint
+- Implemented period filtering logic with period_map dictionary:
+  - 1M: 21 trading days, 3M: 63 days, 6M: 126 days, 1Y: 252 days, 3Y: 756 days, 5Y: 1260 days
+  - Based on ~252 trading days per year approximation
+  - Invalid periods default to 6M with warning log
+- Stock history API logic:
+  - Uppercases symbol parameter for consistency
+  - Extracts period query parameter with default value "6M"
+  - Validates period against period_map, defaults to 6M if invalid
+  - Fetches EOD data using get_cached_eod_history(symbol)
+  - Returns 404 error if no EOD data available for symbol
+  - Filters data to last N trading days based on period (-num_days slice)
+  - Returns JSON array directly using JsonResponse with safe=False
+- Comprehensive logging at INFO and WARNING levels for debugging
+- Django check passes without issues
+- URL routing verified: /api/stock/LUCK/history/ correctly resolves to stock_history_api
+- Code passed ruff check without errors
+- Type hints and comprehensive docstring added with example response
+
+---
+
+### US-013: Create portfolio CRUD API endpoints ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create `/api/portfolio/` GET endpoint - returns all holdings with current prices and P&L
+- [x] Create `/api/portfolio/` POST endpoint - adds new holding, validates symbol exists
+- [x] Create `/api/portfolio/<id>/` PUT endpoint - updates holding
+- [x] Create `/api/portfolio/<id>/` DELETE endpoint - removes holding
+- [x] All endpoints return consistent JSON structure
+
+**Implementation Details:**
+- Created portfolio_list_api view function in core/views.py with @csrf_exempt and @require_http_methods(["GET", "POST"]) decorators
+- Created portfolio_detail_api view function with @csrf_exempt and @require_http_methods(["PUT", "DELETE"]) decorators
+- Added URL patterns "portfolio/" and "portfolio/<int:holding_id>/" in core/urls.py
+- Implemented get_current_price(symbol) helper function to fetch current price from cached market data
+- GET /api/portfolio/ logic:
+  - Fetches all holdings from database using Holding.objects.all()
+  - For each holding, retrieves current price via get_current_price(symbol)
+  - Calculates P&L metrics: investment, current_value, pnl, pnl_percent, change, change_percent
+  - Returns JSON with holdings array containing all fields plus calculated metrics
+  - Handles missing current price gracefully by setting P&L fields to None
+- POST /api/portfolio/ logic:
+  - Validates required fields presence: symbol, quantity, buy_price, buy_date
+  - Validates symbol exists in market data by checking cached market-watch data
+  - Validates quantity is positive integer
+  - Validates buy_price is positive number using Decimal type
+  - Validates buy_date format (YYYY-MM-DD) using datetime.strptime
+  - Creates new holding using Holding.objects.create()
+  - Returns 201 Created with holding data including P&L metrics
+  - Returns 400 Bad Request for validation errors with clear error messages
+- PUT /api/portfolio/<id>/ logic:
+  - Checks holding exists using Holding.objects.get(id=holding_id)
+  - Allows partial updates - only provided fields are updated
+  - Validates each field with same validation logic as POST endpoint
+  - Saves updated holding using holding.save()
+  - Returns 200 OK with updated holding data including P&L metrics
+  - Returns 404 Not Found if holding doesn't exist
+  - Returns 400 Bad Request for validation errors
+- DELETE /api/portfolio/<id>/ logic:
+  - Checks holding exists using Holding.objects.get(id=holding_id)
+  - Deletes holding using holding.delete()
+  - Returns 204 No Content on success
+  - Returns 404 Not Found if holding doesn't exist
+- All numeric values rounded to 2 decimal places using round() function
+- All timestamps formatted as ISO 8601 strings using .isoformat()
+- Comprehensive error handling with try-except blocks for JSON parsing and database operations
+- Logging added at INFO level for debugging (create, update, delete operations)
+- Django check passes without issues
+- URL routing verified: /api/portfolio/ and /api/portfolio/1/ correctly resolve to respective view functions
+- Code passed ruff check without errors
+- All imports verified working via Django shell
+- Type hints added for better code documentation (Optional, float return types)
+
+---
+
+### US-014: Create portfolio summary API endpoint ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create `/api/portfolio/summary/` endpoint (GET)
+- [x] Calculate: total_investment, total_current_value, total_pnl, total_pnl_percent
+- [x] Calculate: best_performer (symbol, percent), worst_performer (symbol, percent)
+- [x] Calculate "what-if" multipliers (10x, 100x) for total portfolio
+- [x] Return all metrics in JSON
+
+**Implementation Details:**
+- Created portfolio_summary_api view function in core/views.py with @require_http_methods(["GET"]) decorator
+- Added URL pattern "portfolio/summary/" in core/urls.py, resulting in /api/portfolio/summary/ endpoint
+- Reused existing get_current_price(symbol) helper function from portfolio_list_api implementation
+- Portfolio summary API logic:
+  - Fetches all holdings from database using Holding.objects.all()
+  - Returns empty summary with zero values if portfolio is empty
+  - For each holding, retrieves current price via get_current_price(symbol)
+  - Accumulates totals: total_investment, total_current_value, total_shares
+  - Tracks performance data for each holding (symbol, pnl_percent) in performers list
+  - Calculates total P&L and P&L percentage from accumulated totals
+  - Determines best_performer and worst_performer by sorting performers list by pnl_percent
+  - Handles missing current price gracefully by using buy_price for calculations with warning log
+  - Calculates what-if multipliers (actual, 10x, 100x) with nested dictionaries
+  - Returns comprehensive JSON with all metrics rounded to 2 decimal places
+- URL pattern ordering important: "portfolio/summary/" must come before "portfolio/<int:holding_id>/" to avoid matching conflict
+- Comprehensive logging at INFO and WARNING levels for debugging
+- Django check passes without issues
+- URL routing verified: /api/portfolio/summary/ correctly resolves to portfolio_summary_api
+- Code passed ruff check without errors
+- Type hints and comprehensive docstring added with example response structure
+
+---
+
+### US-015: Seed database with initial holdings ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create Django management command `seed_holdings`
+- [x] Insert holdings: LUCK(5, 394.00), HUBC(9, 203.30), MEBL(5, 424.90), SAZEW(1, 2017.00), PSO(6, 344.00)
+- [x] Set buy_date to a reasonable past date
+- [x] Set broker to "HMFS" for all
+- [x] Command is idempotent (doesn't duplicate on re-run)
+
+**Implementation Details:**
+- Created Django management command structure: core/management/commands/seed_holdings.py
+- Added __init__.py files to core/management/ and core/management/commands/ directories to make them Python packages
+- Command extends BaseCommand and implements handle(*args, **options) method
+- Initial holdings data defined as list of dictionaries with symbol, quantity, and buy_price fields
+- Used Decimal('XXX.XX') type for buy_price values to match DecimalField precision requirements
+- Set buy_date to 60 days ago using timezone.now() - timedelta(days=60) then .date() to extract date
+- Set broker to "HMFS" for all holdings as specified
+- Idempotency implemented via Holding.objects.filter(symbol=symbol).exists() check before creation
+- Holdings created using Holding.objects.create() with all required fields
+- Added notes field with "Initial seed data" for tracking purposes
+- Command provides colored output using self.stdout.write(self.style.SUCCESS/WARNING('message'))
+- Displays summary at end: created count, skipped count
+- Tested command successfully:
+  - First run: created all 5 holdings (LUCK, HUBC, MEBL, SAZEW, PSO)
+  - Second run: skipped all 5 holdings (idempotent check working)
+  - Django shell verification confirmed all holdings exist with correct quantities, buy prices, buy date (2026-01-02), and broker (HMFS)
+- Code passed ruff check after fixing unnecessary f-string prefixes
+- Django check passes without issues
+- Command accessible via: python manage.py seed_holdings
+
+---
+
+
+### US-016: Create React navigation and layout ✓
+**Completed:** 2026-03-03
+
+**Implementation:**
+- Installed react-router-dom package for routing support
+- Created three page components: Dashboard.jsx, Portfolio.jsx, Settings.jsx in frontend/src/pages/
+- Updated Layout.jsx component to include:
+  - Sidebar navigation with Dashboard, My Portfolio, Settings links
+  - Active route highlighting using useLocation hook and conditional className
+  - Mobile-responsive design with hamburger menu overlay
+  - Last updated timestamp in header with relative time formatting
+  - Dark theme colors (#1a1a2e main background, #16213e sidebar/header)
+- Updated App.jsx to use BrowserRouter with Routes and Route components
+- Added lastUpdated state in App.jsx passed to Layout component for timestamp display
+- Mobile sidebar:
+  - Hidden on desktop (hidden md:flex)
+  - Fixed overlay with semi-transparent backdrop on mobile
+  - Hamburger menu button in header
+  - Closes when clicking backdrop or selecting a route
+- Active route detection:
+  - isActivePath() function handles root path special case
+  - Green highlight (bg-green-500/20 text-green-400) for active route
+- Timestamp formatting:
+  - formatLastUpdated() converts date to relative time
+  - Shows 'Just now', 'X minutes ago', 'X hours ago'
+- Verified implementation:
+  - npm run dev starts without errors
+  - Dev server runs successfully on port 5174
+  - All routes work correctly
+  - Mobile responsiveness verified
+
+**Acceptance Criteria Completion:**
+- [x] Create sidebar navigation with links: Dashboard, My Portfolio, Settings
+- [x] Highlight active route
+- [x] Show "Last updated: X" timestamp in header (updates with data refresh)
+- [x] Mobile-responsive: sidebar collapses to hamburger menu
+- [x] Dark theme: dark gray background (#1a1a2e or similar), white text
+
+---
+
+## US-017 Implementation (KMI-30 Dashboard Table Component)
+- Tailwind CSS v4 requires @tailwindcss/postcss plugin and updated postcss.config.js
+- Tailwind v4 uses @import "tailwindcss" instead of @tailwind directives in CSS files
+- Cannot use @apply in Tailwind v4; must use standard CSS properties instead
+- Created reusable LoadingSpinner component for consistent loading states across app
+- Created formatters utility module with formatPKR(), formatNumber(), formatPercent() functions
+- Dashboard component uses useState and useEffect hooks for data fetching and state management
+- Color coding logic: getPriceColor() function compares current price to LDCP (Last Day Close Price)
+- Green for price > LDCP, red for price < LDCP, gray for equal or missing data
+- Table uses Tailwind classes for dark theme: bg-gray-800, bg-gray-900, text-white, text-gray-300
+- Hover effect on table rows improves UX: hover:bg-gray-700 with transition-colors
+- Error handling shows retry button for failed API requests
+- lastUpdated timestamp displays when data was last fetched
+- Frontend build verification: npm run build successfully compiles all components
+- Django system check: python manage.py check passes without errors
+
+
+## US-018 Implementation (Add Sorting to Dashboard Table)
+- Added sortConfig state to track active sort column and direction (asc/desc)
+- Default sort set to 'symbol' ascending for alphabetical ordering on page load
+- handleSort function implements toggle logic: asc → desc on second click, new column starts with asc
+- getSortedData creates copy of marketData with spread operator to avoid mutating original state
+- Sort comparator handles edge cases:
+  - null/undefined values pushed to end of list (return 1/-1)
+  - String comparison uses .toLowerCase() for case-insensitive alphabetical sorting
+  - Numeric comparison works natively with < and > operators
+- getSortIcon helper returns Unicode arrow symbols (▲ for asc, ▼ for desc) only for active column
+- Column headers enhanced with:
+  - onClick handlers to trigger sorting
+  - cursor-pointer class for visual affordance
+  - hover:bg-gray-800 transition for interactive feedback
+  - Sort indicator appended to column text
+- Applied sorted data by calling getSortedData() in tbody map function
+- All 9 columns (Symbol, Company, Price, Change, Change%, Volume, High, Low, LDCP) are sortable
+- Frontend build verification: npm run build succeeds without errors
+- Sorting works for both text columns (symbol, name) and numeric columns (all others)
+
+**Acceptance Criteria Completion:**
+- [x] Click column header to sort ascending
+- [x] Click again to sort descending
+- [x] Show sort indicator arrow on active column
+- [x] Default sort by symbol alphabetically
+- [x] Sorting works for all numeric and text columns
+
+---
+
+## US-019 Implementation (Add Auto-Refresh to Dashboard)
+- Created marketHours.js utility module with isMarketOpen() and getMarketStatusMessage() functions
+- isMarketOpen() uses Date.toLocaleString() with timeZone option to get current time in 'Asia/Karachi' timezone
+- Market hours check: Mon-Fri (dayOfWeek 1-5), between 09:30 and 15:30 PKT
+- Weekend detection: dayOfWeek === 0 (Sunday) or dayOfWeek === 6 (Saturday)
+- Auto-refresh implemented with useEffect hook and setInterval for REFRESH_INTERVAL_MS (3 minutes = 180000ms)
+- Conditional auto-refresh: only active when marketStatus.open === true
+- Cleanup function in useEffect returns clearInterval to prevent memory leaks
+- Countdown timer state initialized to REFRESH_INTERVAL_MS / 1000 (180 seconds)
+- Countdown decrements every second using separate useEffect with 1000ms interval
+- fetchMarketData resets countdown to full 3 minutes after each fetch
+- Manual refresh button with handleManualRefresh() function allows user-triggered updates
+- isRefreshing state prevents duplicate refresh requests and shows loading indicator
+- formatCountdown() formats seconds as MM:SS with padStart for leading zeros
+- Market status badge uses conditional styling:
+  - Green badge (bg-green-500/20 text-green-400 border-green-500/50) for open market
+  - Red badge (bg-red-500/20 text-red-400 border-red-500/50) for closed market
+- UI displays:
+  - Market status message (Market Open / Market Closed / Market Closed - Weekend)
+  - Manual refresh button with spinning icon during refresh
+  - Last updated timestamp
+  - Countdown timer (only shown when market is open)
+  - "Auto-refresh disabled (market closed)" message when market is closed
+- Market status updates every minute to check for market open/close transitions
+- Refresh button disabled and grayed out (bg-gray-600 text-gray-400 cursor-not-allowed) during refresh
+- Responsive design: flex-col on mobile, flex-row on sm+ breakpoints for header controls
+- ESLint passed after removing unused catch variable (changed 'catch (error)' to 'catch')
+- Frontend build successful: npm run build completes without errors (242.10 kB bundle)
+- Python code verified with ruff check: auto-fixed 2 formatting issues
+- Django check passes without errors
+
+**Acceptance Criteria Completion:**
+- [x] Auto-refresh every 3 minutes during market hours (Mon-Fri 9:30-15:30 PKT)
+- [x] Show countdown to next refresh in header
+- [x] Outside market hours, show "Market Closed" and disable auto-refresh
+- [x] Manual refresh button always available
+- [x] Update "Last updated" timestamp after each refresh
+
+---
+
+
+## US-020: Add KMI-30 index summary bar
+
+**Implementation Details:**
+- Modified market-watch API view to calculate index summary statistics when `index=kmi30` parameter is provided
+- Index summary calculation uses simple average of change_percent across all KMI-30 stocks (not market-cap weighted)
+- Summary includes: total_volume (sum), avg_change_percent (average), stocks_up/down/unchanged (counts), total_stocks (count)
+- Summary conditionally added to JSON response only when filtering by KMI-30 index
+- Dashboard component updated to display summary bar with three sections: Index Change, Total Volume, Market Breadth
+- Market Breadth visualization shows proportion of stocks up vs down using colored progress bar
+- Green/red coloring applied based on avg_change_percent value (positive = green, negative = red, zero = gray)
+- Summary bar displays above the table with responsive flex layout (flex-col on mobile, flex-row on sm+)
+- Used existing formatNumber utility for volume display with comma separators
+
+**Key Learnings:**
+- Conditional response fields in Django: add fields to response dict only when relevant (if index_summary: response_data["index_summary"] = ...)
+- Simple average calculation suitable for index movement indication without requiring complex market-cap weighted calculations
+- Visual market breadth indicator using inline styles with dynamic width percentages provides intuitive at-a-glance view
+- Ternary operator chains in JSX enable clean conditional styling (positive ? green : negative ? red : gray)
+- Dictionary comprehension with sum() and len() functions efficient for calculating summary statistics from list
+- Logger.info() calls useful for debugging summary calculation results in backend
+- ruff check passed without issues; Django manage.py check confirms no integration errors
+- Setting state values to null (setIndexSummary(null)) when data not available prevents errors with conditional rendering
+
+**Acceptance Criteria Completion:**
+- [x] Display summary bar above the table
+- [x] Show KMI-30 index value and daily change (calculated from individual stock data)
+- [x] Color green if up, red if down
+- [x] Show total market volume for KMI-30 stocks
+
+---
+
+## US-021: Add expandable row to dashboard table
+**Completed:** All acceptance criteria met
+
+**Implementation Details:**
+- Added expandedSymbol state to track which row is currently expanded
+- Added portfolioSymbols state to track which stocks are already in portfolio
+- Implemented handleRowClick() to toggle row expansion (collapses previous when expanding new)
+- Added fetchPortfolioSymbols() to fetch current portfolio holdings on mount
+- Modified table rows to be clickable with expand/collapse indicators (▶/▼)
+- Created expanded section with three columns: 52-week range, day range, and volume comparison
+- 52-week range shows horizontal bar with current price position
+- Day range shows horizontal bar with current price position within today's high/low
+- Volume comparison shows percentage difference vs average volume (when available)
+- Added "View Full Details" button that navigates to /stock/:symbol route
+- Added "Add to Portfolio" button that navigates to /portfolio?add=:symbol (only shown if not in portfolio)
+- Created basic StockDetail.jsx page component for stock detail view
+- Added /stock/:symbol route to App.jsx
+- Used e.stopPropagation() on buttons to prevent row click when clicking buttons
+
+**Learnings:**
+- useNavigate hook from react-router-dom enables programmatic navigation
+- Fragment (<></>) is useful for returning multiple table rows without wrapper div
+- e.stopPropagation() prevents event bubbling when buttons are inside clickable rows
+- Conditional rendering with && operator keeps JSX clean for optional elements
+- Portfolio symbols should be fetched separately to avoid coupling dashboard with portfolio API
+- Progressive bar visualization with percentage-based width provides intuitive data representation
+- Grid layout (grid-cols-1 md:grid-cols-3) ensures responsive design for expanded content
+- Tailwind's transition-colors class provides smooth hover effects
+- Console warnings for failed portfolio fetch should not break the main feature
+
+**Files Modified:**
+- frontend/src/pages/Dashboard.jsx (added expandable row functionality)
+- frontend/src/App.jsx (added StockDetail route)
+- frontend/src/pages/StockDetail.jsx (created new file)
+- PRD.md (marked US-021 as completed)
+
+**Verification:**
+- npm run build completed successfully with no errors
+- Django checks pass (deployment warnings are expected in dev)
+- All acceptance criteria verified in code
+
+
+---
+
+## US-022: Create portfolio holdings table (Completed)
+
+**Key Implementation Details:**
+- Portfolio page follows same pattern as Dashboard: useState/useEffect for data fetching
+- LoadingSpinner component reused for consistent loading states across pages
+- Error handling includes retry button for failed API requests
+- Empty state provides user guidance when no holdings exist
+- formatPKR, formatNumber, formatPercent utilities ensure consistent number formatting
+- Conditional CSS classes (text-green-500, text-red-500) for P&L color coding
+- getPnLColor helper function centralizes color logic for positive/negative values
+- API endpoint /api/portfolio/ returns holdings array with calculated P&L fields
+- Table includes all required columns: Symbol, Qty, Buy Price, Current Price, Change, Change%, Investment, Current Value, P&L
+- Hover effects (hover:bg-gray-700) improve table interactivity
+
+**Learnings:**
+- React Router's useNavigate can accept query params for future "Add Holding" functionality
+- Portfolio API response structure includes computed fields (pnl, pnl_percent, investment, current_value) from backend
+- Frontend doesn't need to calculate P&L - backend provides enriched holding data with current prices
+- Consistent table styling across Dashboard and Portfolio pages improves UX
+- Loading state should be shown on initial mount, error state for failed fetches
+- Empty state messaging encourages user action ("Add Holding" button)
+
+**Files Modified:**
+- frontend/src/pages/Portfolio.jsx (implemented full holdings table with P&L display)
+- PRD.md (marked US-022 as completed)
+
+**Verification:**
+- npm run build completed successfully with no errors
+- Django system check passes (python manage.py check)
+- All acceptance criteria verified: component created, API fetch implemented, table with 9 columns, P&L coloring, loading spinner
+
+
+- US-023 completed: Portfolio summary cards implemented in Portfolio.jsx
+- React state management: Added 'summary' state to manage portfolio summary data
+- Parallel API fetching: Used Promise.all() to fetch holdings and summary simultaneously for better performance
+- Summary API endpoint at /api/portfolio/summary/ already existed from US-014 (no backend changes needed)
+- Summary cards display: Total Investment, Current Value, Total P&L with percentage, Best/Worst Performers
+- Green/red border coloring on P&L card using conditional Tailwind classes (border-l-4 border-green-500 / border-red-500)
+- Responsive grid layout: 1 column on mobile, 2 on tablet, 4 on desktop (grid-cols-1 md:grid-cols-2 lg:grid-cols-4)
+- Conditional rendering: Summary cards only shown when both summary data exists and holdings.length > 0
+- Formatter utilities (formatPKR, formatPercent) used consistently for all monetary and percentage values
+- getPnLColor() helper function reused for consistent color coding throughout the component
+
+---
+
+## US-024: Add "What If" multiplier analysis (Completed)
+
+**Key Implementation Details:**
+- Backend already provided what_if data in portfolio summary API (US-014 implementation)
+- Added new "What If Analysis" section below holdings table in Portfolio.jsx
+- Section only renders when summary exists and has what_if data (conditional rendering)
+- Created comparison table with 4 columns: Metric, Actual, 10x, 100x
+- Four metric rows: Total Shares, Total Invested, Current Value, Profit/Loss
+- Used formatNumber() for share counts and formatPKR() for monetary values
+- Applied same getPnLColor() helper for consistent profit/loss color coding
+- Fragment (<></>) used to wrap both holdings table and what-if section without extra div
+- Dark theme styling consistent with rest of application (bg-gray-800, rounded-lg)
+
+**Learnings:**
+- Backend what_if structure uses string keys '10x' and '100x', accessed via bracket notation in JSX
+- React Fragment required when conditionally rendering multiple sibling elements after holdings table
+- Descriptive paragraph text improves UX by explaining what the analysis shows
+- Table structure can be reused with different data (similar pattern to holdings table)
+- Profit/Loss row benefits from color coding like other P&L displays (green for positive, red for negative)
+- No backend changes needed when data already exists in API response
+- Frontend formatting utilities (formatPKR, formatNumber) handle large numbers gracefully
+
+**Files Modified:**
+- frontend/src/pages/Portfolio.jsx (added What If Analysis section)
+- PRD.md (marked US-024 as completed)
+
+**Verification:**
+- npm run lint passed with no new warnings/errors in Portfolio.jsx
+- npm run build completed successfully (1.94s build time)
+- All four acceptance criteria verified:
+  ✓ What If Analysis section added below holdings table
+  ✓ Comparison table with columns: Metric, Actual, 10x, 100x
+  ✓ Four rows: Total Shares, Total Invested, Current Value, Profit/Loss
+  ✓ Calculations based on current portfolio totals (from backend API)
+
+
+- Modal components in React should be conditionally rendered based on isOpen prop
+- Modal backdrop uses fixed inset-0 positioning with semi-transparent overlay (bg-black bg-opacity-50)
+- z-50 ensures modal appears above all other content
+- Modal close handling requires onClose callback prop passed from parent component
+- Form state management uses single useState object with multiple fields (formData)
+- Autocomplete dropdown requires separate filtered state and showDropdown visibility flag
+- useEffect with dependency on formData.symbol updates filtered symbols as user types
+- Symbol autocomplete filters using .toLowerCase().includes() for case-insensitive matching
+- Clicking outside dropdown or selecting item closes dropdown (setShowDropdown(false))
+- Form validation should be async when checking against external API (market data existence)
+- Inline error display pattern: conditional border color (border-red-500) and error text below field
+- Error state uses object mapping field names to error messages for granular validation feedback
+- isSubmitting state prevents duplicate form submissions during async POST request
+- Form submission preventDefault() required to prevent default browser form behavior
+- parseInt() and parseFloat() convert string form values to correct types for API payload
+- Symbol should be uppercased (.toUpperCase()) before sending to API for consistency
+- Empty/optional fields sent as null (notes: formData.notes || null) to match backend expectations
+- Success callback (onSuccess) triggers parent component refresh (fetchPortfolio) before closing modal
+- Date input max attribute restricts future dates (max={new Date().toISOString().split('T')[0]})
+- Disabled state on submit button prevents interaction during form submission (disabled={isSubmitting})
+- Modal components should be placed at end of parent component JSX for proper stacking context
+- Add button in header uses flex layout with gap-2 for icon and text spacing
+- KMI_30_SYMBOLS array duplicated in frontend for autocomplete (could be fetched from API in future)
+
+---
+
+### US-025: Create add holding modal ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] "Add Holding" button opens modal
+- [x] Form fields: Symbol (dropdown/autocomplete from KMI-30), Quantity, Buy Price, Buy Date, Broker (default "HMFS"), Notes
+- [x] Validate symbol exists in market data
+- [x] Submit POSTs to `/api/portfolio/`
+- [x] Close modal and refresh table on success
+- [x] Show validation errors inline
+
+**Implementation Notes:**
+- Created AddHoldingModal.jsx component with full form functionality
+- Integrated autocomplete dropdown for KMI-30 symbols with real-time filtering
+- Implemented comprehensive form validation including async market data existence check
+- Added inline error messages for all fields with visual feedback (red borders)
+- Modal manages its own form state with useState hooks
+- Parent Portfolio component passes isOpen, onClose, and onSuccess props
+- Success callback triggers fetchPortfolio() to refresh holdings table
+- Date input restricted to past dates only using max attribute
+- Broker field defaults to "HMFS" as specified
+- Modal responsive design works on mobile with max-h-[90vh] overflow-y-auto
+- Submit button shows loading state ("Adding...") during API request
+
+---
+
+### US-026: Create edit holding modal ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Edit button on each holding row opens modal
+- [x] Pre-populate form with existing data
+- [x] Submit PUTs to `/api/portfolio/<id>/`
+- [x] Close modal and refresh table on success
+
+**Implementation Notes:**
+- Created EditHoldingModal.jsx component based on AddHoldingModal pattern
+- Added "Actions" column to Portfolio holdings table with Edit button in each row
+- Edit button triggers handleEditClick(holding) to set editingHolding state and open modal
+- Modal receives holding prop and pre-populates form using useEffect when isOpen && holding changes
+- Form data converted to strings for controlled inputs (.toString() for numeric fields)
+- Uses PUT method instead of POST for updates to `/api/portfolio/${holding.id}/`
+- Modal header title changed to "Edit Holding" and button text to "Update Holding"
+- Loading state during submission shows "Updating..." instead of "Adding..."
+- All validation logic identical to AddHoldingModal (symbol existence, required fields, positive numbers)
+- Success callback triggers fetchPortfolio() to refresh portfolio data after edit
+- Edit button styled with bg-gray-700 hover:bg-gray-600 for consistency with table theme
+- Actions column centered with text-center class for better alignment
+
+**Learnings:**
+- Edit modals follow same pattern as add modals but with pre-population and different HTTP method
+- useEffect dependency array [isOpen, holding] ensures form resets when modal opens with new holding
+- Holding prop passed from parent contains all necessary fields (id, symbol, quantity, buy_price, buy_date, broker, notes)
+- Numeric fields from backend need .toString() conversion for controlled input value attributes
+- Optional chaining (?.) prevents errors when holding fields are undefined (quantity?.toString())
+- PUT request URL uses template literals to interpolate holding.id: `/api/portfolio/${holding.id}/`
+- State management pattern: editingHolding state holds selected holding, passed to modal as prop
+- Table row handler pattern: onClick={() => handleEditClick(holding)} passes current row's holding object
+- Adding new column to table requires both <th> in thead and <td> in tbody for each row
+- Actions column typically placed as last column for better UX and visual hierarchy
+
+- Confirmation modals require separate isOpen state and target object state (e.g., deletingHolding)
+- Confirmation modals display critical action warnings with danger colors (red) and warning icons
+- isDeleting state prevents multiple simultaneous delete operations during API calls
+- Disabled state on confirm button during operation prevents accidental double-clicks
+- handleClose checks isDeleting to prevent modal dismissal during active delete operation
+- Delete confirmation shows summary of item being deleted (symbol, quantity, buy_price) for user verification
+- Warning icon SVG (triangle with exclamation mark) provides visual emphasis of destructive action
+- Confirmation text should be clear: "Are you sure you want to delete this holding? This action cannot be undone."
+- Two-button layout: Cancel (gray) and Delete/Confirm (red) with flex-1 for equal widths
+- Button loading states show verb in present progressive: "Deleting..." instead of "Delete"
+- Modal only renders when isOpen && holding are both truthy (early return prevents null errors)
+- DELETE requests typically return 204 No Content status with empty body on success
+- Parent component handles both opening modal (setIsDeleteModalOpen + setDeletingHolding) and closing (reset both states)
+- Success flow: API call → close modal → reset state → refresh parent data (fetchPortfolio)
+- Error handling in confirmation uses alert() for simplicity but could use toast/snackbar in production
+
+---
+
+### US-027: Create delete holding confirmation ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Delete button on each holding row
+- [x] Show confirmation dialog: "Delete SYMBOL holding?"
+- [x] Confirm DELETEs to `/api/portfolio/<id>/`
+- [x] Refresh table on success
+
+**Implementation Notes:**
+- Created DeleteConfirmationModal.jsx component for safe deletion workflow
+- Added Delete button to Portfolio holdings table Actions column with red styling
+- Delete button triggers handleDeleteClick(holding) to set deletingHolding state and open modal
+- Modal displays warning icon, confirmation message, and holding details (symbol, quantity, buy_price)
+- Confirmation message: "Delete {holding.symbol} holding?" with subtext about irreversibility
+- Cancel and Delete buttons with disabled state during deletion operation
+- handleDeleteConfirm sends DELETE request to `/api/portfolio/${holding.id}/`
+- Backend returns 204 No Content on successful deletion (views.py:710-713)
+- Modal closes and portfolio refreshes via fetchPortfolio() after successful deletion
+- Error handling shows alert on failure with retry prompt
+- Delete button styled with bg-red-600 hover:bg-red-700 for clear destructive action indication
+- Modal includes isDeleting state to show "Deleting..." loading text during API call
+- Holding details displayed in bordered box (bg-gray-900 border-gray-700) for visual separation
+
+**Files Modified:**
+- frontend/src/components/DeleteConfirmationModal.jsx (created)
+- frontend/src/pages/Portfolio.jsx (added delete button and modal integration)
+- PRD.md (marked US-027 as completed)
+
+**Verification:**
+- npm run build completed successfully with no errors
+- python manage.py check passed with no issues
+- ruff check core/views.py passed all checks
+- All four acceptance criteria verified:
+  ✓ Delete button present in Actions column of each holding row
+  ✓ Confirmation dialog shows "Delete {SYMBOL} holding?" message
+  ✓ DELETE request sent to `/api/portfolio/<id>/` endpoint (backend views.py:710-713)
+  ✓ Portfolio table refreshes after successful deletion via fetchPortfolio()
+
+
+
+## US-028 Learnings
+
+- Stock detail page requires portfolio membership check to conditionally show 'Add to Portfolio' button
+- Portfolio check performed via separate API call to /api/portfolio/ endpoint
+- Array.some() method efficient for checking if symbol exists in holdings array
+- Case-insensitive symbol comparison (toUpperCase()) ensures reliable matching across systems
+- AddHoldingModal component accepts optional initialSymbol prop to pre-fill symbol field when opened from stock detail page
+- React useEffect dependency array must include initialSymbol to properly reset form when modal reopens with different symbol
+- Conditional rendering with !isInPortfolio hides button once stock is added to portfolio
+- handleAddSuccess callback updates local state (setIsInPortfolio) for immediate UI feedback without page reload
+- SVG plus icon inline in button provides visual affordance for 'add' action
+- Border-top with padding-top creates visual separation between primary content and action button
+- Full width button on mobile (w-full sm:w-auto) improves touch target size and usability
+- Portfolio check failures handled silently (no error shown to user) since it's not critical to core functionality
+- Frontend build verification (npm run build) confirms no TypeScript/ESLint errors before considering task complete
+- Django manage.py check validates backend code structure and catches configuration issues
+
+
+
+## US-029 Completion Summary
+
+**User Story:** US-029 - Add price chart to stock detail page
+
+**Status:** ✅ COMPLETED - All acceptance criteria met
+
+**Acceptance Criteria:**
+- [x] Integrate Chart.js or Recharts library
+- [x] Display line chart of EOD close prices
+- [x] Period selector buttons: 1M, 3M, 6M, 1Y, 3Y, 5Y
+- [x] Default to 6M view
+- [x] Fetch data from `/api/stock/<symbol>/history/?period=X`
+- [x] Show loading state while fetching
+
+**Implementation Notes:**
+- Installed Recharts library (npm install recharts) for React-friendly charting
+- Created PriceChart.jsx component with responsive design using ResponsiveContainer
+- Implemented period selector with 6 buttons (1M, 3M, 6M, 1Y, 3Y, 5Y) with active state highlighting
+- Default period set to '6M' via useState initial value
+- Chart data fetched from `/api/stock/${symbol}/history/?period=${selectedPeriod}` endpoint
+- Used useCallback for fetchChartData to satisfy React hooks exhaustive-deps lint rule
+- Loading state displays LoadingSpinner component with "Loading chart data..." message
+- Error state shows error message with retry button for failed fetches
+- Custom Tooltip component provides dark-themed hover information (date + price)
+- XAxis tickFormatter adapts date format based on period (MM/DD for short, MM/YY for long periods)
+- YAxis displays PKR symbol (₨) with formatted prices
+- Chart summary section shows period high, period low, start price, and end price
+- Line chart styled with green stroke (#10B981) and no dots for clean appearance
+- activeDot with radius 6 provides hover interaction feedback
+- Grid lines styled with stroke-dasharray for subtle appearance matching dark theme
+
+**Files Created:**
+- frontend/src/components/PriceChart.jsx
+
+**Files Modified:**
+- frontend/src/pages/StockDetail.jsx (added PriceChart import and replaced placeholder)
+- frontend/package.json (added recharts dependency)
+- PRD.md (marked US-029 as completed)
+
+**Verification:**
+- npx eslint src/components/PriceChart.jsx passed with no errors or warnings
+- npx eslint src/pages/StockDetail.jsx shows only pre-existing warning (not related to US-029)
+- Component imports verified with Node.js check
+- All six acceptance criteria verified and marked complete
+- Chart component includes loading state, error handling, and retry functionality
+- Period selector buttons functional with visual feedback for active period
+- Responsive design ensures chart adapts to container width
+
+
+### US-037: Create settings page
+- Created two new backend API endpoints in core/views.py: cache_status_api (GET) and cache_clear_api (POST)
+- cache_status_api returns comprehensive cache information: market_watch (last_updated, age_seconds, cache_duration), eod_data (total_cached_symbols, oldest_cache), fundamentals (total_cached_symbols, oldest_cache)
+- Used django.utils.timezone.now() to calculate cache age in seconds by subtracting fetched_at from current time
+- cache_clear_api deletes all entries from MarketDataCache, EODDataCache, and FundamentalsCache models using .delete() method
+- Returns deleted_counts dictionary showing how many entries were deleted from each cache type
+- Added @csrf_exempt decorator to cache_clear_api since it's a POST endpoint and needs to accept requests without CSRF token
+- Added both endpoints to core/urls.py urlpatterns: path("cache-status/", ...) and path("cache-clear/", ...)
+- Settings.jsx implemented as comprehensive settings page with four main sections: App Version, Tracked Indices, Cache Status, Clear Cache
+- Used useState hooks to manage cacheStatus, indices, loading, clearing, and clearMessage state
+- Implemented fetchData() function that fetches both /api/cache-status/ and /api/indices/ in parallel using Promise.all()
+- Created handleClearCache() function with window.confirm() prompt before clearing cache for user safety
+- Implemented three helper functions for display formatting: formatTimestamp() (converts ISO string to readable date), formatAge() (converts seconds to "Xs ago" format), formatDuration() (converts seconds to human-readable duration)
+- App version hardcoded as const APP_VERSION = '1.0.0' (matches package.json default)
+- KMI-30 symbols displayed as flex-wrapped badges using bg-green-500/20 with border-green-500/50 styling (consistent with Shariah badge)
+- Cache status shows three separate sections for market_watch, eod_data, and fundamentals with bg-gray-900 nested inside bg-gray-800 for depth
+- Clear Cache button uses bg-red-600 hover:bg-red-700 for destructive action styling, disabled state shows bg-gray-600
+- Success/error messages use conditional styling: green for success (bg-green-500/20), red for error (bg-red-500/20)
+- Settings page already had placeholder in Settings.jsx, and route already configured in App.jsx at path="/settings"
+- Verification: ruff check passed for core/views.py and core/urls.py with no issues
+- Verification: python manage.py check passed with "System check identified no issues (0 silenced)"
+- All five acceptance criteria completed: Settings component created, KMI-30 symbols displayed, cache status shown, Clear Cache button functional, app version displayed
+
+
+---
+
+## US-037 Completed ✓
+Date: 2026-03-03
+Status: All acceptance criteria completed
+- [x] Create Settings page component
+- [x] Show current KMI-30 symbols list (read-only display)
+- [x] Show cache status: market data age, EOD data age
+- [x] Add "Clear Cache" button to force refresh all data
+- [x] Show app version
+
+Implementation summary:
+- Backend: Added cache_status_api and cache_clear_api endpoints to core/views.py (lines 928-1092)
+- Backend: Added URL routes to core/urls.py (lines 18-19)
+- Frontend: Fully implemented Settings.jsx with all required features (285 lines)
+- Verification: ruff check passed, Django system check passed
+
+
+---
+
+### US-038: Add PKR currency formatting utility ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Create `formatPKR(value)` utility function
+- [x] Format with 2 decimal places and comma separators
+- [x] Prefix with "PKR " (e.g., "PKR 1,970.00")
+- [x] Handle negative values with minus sign before PKR
+- [x] Handle null/undefined gracefully
+
+**Implementation Details:**
+- Created formatPKR(value) function in frontend/src/utils/formatters.js
+- Function accepts number, null, or undefined and returns formatted string
+- Null/undefined/NaN handling returns 'PKR 0.00' as safe fallback
+- Uses toLocaleString('en-PK') with minimumFractionDigits: 2, maximumFractionDigits: 2
+- Comma separators automatically added by toLocaleString
+- Negative value handling: calculates absolute value, then prefixes with minus sign before PKR
+- Minus sign placed BEFORE "PKR" prefix as per acceptance criteria
+- Function is pure and stateless with deterministic output
+- Exported as named export: export function formatPKR(value)
+- JSDoc comment provides parameter and return type documentation
+- Companion utilities in same file: formatNumber, formatPercent, formatMarketCap
+- formatMarketCap reuses formatPKR for small values for code reuse
+- Used in 4 components: Dashboard.jsx, Portfolio.jsx, StockDetail.jsx, PriceChart.jsx
+- Frontend build verification (npm run build) confirms no errors
+- All acceptance criteria fulfilled and verified
+
+---
+
+### US-039: Add responsive mobile styles ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] Tables become horizontally scrollable on small screens
+- [x] Navigation collapses to hamburger menu below 768px
+- [x] Cards stack vertically on mobile
+- [x] Touch-friendly tap targets (min 44px)
+- [x] Chart is readable on mobile (min height 200px)
+
+**Implementation Details:**
+- Tables: Already had overflow-x-auto class on table wrappers in Dashboard.jsx and Portfolio.jsx
+- Navigation: Hamburger menu already implemented in Layout.jsx with md:hidden responsive class
+- Cards: Grid layouts already responsive with grid-cols-1 md:grid-cols-2 lg:grid-cols-3/4 patterns
+- Touch targets: Updated all button padding from py-2 to py-3 for 44px minimum height
+  - py-3 = 12px top + 12px bottom = 24px padding + ~20px text height = 44px total
+  - Updated 7 files: Dashboard.jsx, Portfolio.jsx, StockDetail.jsx, PriceChart.jsx, AddHoldingModal.jsx, EditHoldingModal.jsx, DeleteConfirmationModal.jsx
+  - Used replace_all to update all instances of "px-4 py-2" to "px-4 py-3"
+- Chart: ResponsiveContainer in PriceChart.jsx already set to height={400} (well above 200px minimum)
+- Verification: Django check passed, frontend build successful
+- All acceptance criteria met with minimal changes needed
+
+
+### US-040: Add error handling and stale data indicators ✓
+**Completed:** 2026-03-03
+**Acceptance Criteria:**
+- [x] If market-watch fetch fails, show cached data with warning icon
+- [x] Tooltip on warning icon: "Data may be stale - last updated X"
+- [x] If no cached data available, show friendly error message
+- [x] Log all scrape errors to console for debugging
+- [x] Never show a completely broken state to user
+
+**Implementation Details:**
+- Created StaleDataWarning component (frontend/src/components/StaleDataWarning.jsx) with hover tooltip
+- Component shows yellow warning icon when is_stale prop is true
+- Tooltip displays relative time using formatRelativeTime helper (e.g., "5 minutes ago")
+- Updated Dashboard.jsx to extract is_stale from API and display warning next to last updated timestamp
+- Updated Dashboard.jsx error handling with SVG icon, friendly message, and improved retry button
+- Updated Portfolio.jsx to check for missing current_price and show warning banner
+- Updated StockDetail.jsx to display stale data warning in stock header
+- All three pages now show friendly error messages instead of generic errors
+- Backend scraper logging verified: 73 logging statements across all fetch functions
+- Backend already returns is_stale flag for graceful degradation when cache used after fetch failure
+- Never show completely broken state: either cached data with warning or friendly error message
+- Verification: ruff check passed, Python imports successful, npm build completed successfully
+
+---
+
+## US-042: Add comprehensive README
+**Status:** COMPLETED
+**Date:** 2024-03-03
+
+### Changes Made
+1. Created comprehensive README.md (13KB) in project root
+2. Documented all major features with descriptions
+3. Added complete installation instructions for both Python and Node.js
+4. Included step-by-step running instructions with setup command
+5. Documented all API endpoints with request/response examples
+6. Added detailed notes about PSX data source and rate limiting strategy
+7. Included project structure overview
+8. Added development commands and troubleshooting section
+9. Included tech stack badges and version information
+10. Marked US-042 acceptance criteria as complete in PRD.md
+
+### API Documentation Included
+- Market Data Endpoints: /api/market-watch/, /api/stock/<symbol>/, /api/stock/<symbol>/history/
+- Portfolio Endpoints: GET/POST /api/portfolio/, PUT/DELETE /api/portfolio/<id>/, /api/portfolio/summary/
+- Utility Endpoints: /api/indices/, /api/cache-status/, /api/cache-clear/
+- All endpoints documented with query parameters and response examples
+
+### Key Documentation Sections
+- Features list with categorized capabilities
+- Tech stack with version badges
+- Installation prerequisites and steps
+- Quick start guide with setup command
+- Complete API reference with JSON examples
+- Data source notes and rate limiting strategy
+- Project structure overview
+- Development commands
+- Troubleshooting guide
+- Configuration options
+
+**Learnings:**
+- Professional README structure should include badges for quick tech stack visibility
+- API documentation is most valuable when it includes actual request/response examples
+- Installation instructions should be platform-specific (Windows vs macOS/Linux)
+- Rate limiting strategy documentation helps users understand caching behavior
+- Troubleshooting section addresses common developer pain points
+- Project structure tree provides quick navigation reference
+- Disclaimer about data delay and informational purposes protects against misuse
+- Version numbering helps track major releases
+
+**Acceptance Criteria Completion:**
+- [x] Create README.md with: Project description, Features list, Tech stack
+- [x] Installation steps: clone, install Python deps, install npm deps
+- [x] Running instructions: python manage.py setup, python manage.py runserver, npm run dev
+- [x] API documentation summary
+- [x] Note about PSX data source and rate limiting
+
+**Files Modified:**
+- README.md (created, 13KB)
+- PRD.md (marked US-042 as completed)
+
+**Verification:**
+- README.md created successfully with 13KB of content
+- File contains all required sections per acceptance criteria
+- Markdown formatting verified with head command
+- All acceptance criteria marked as complete in PRD.md
+

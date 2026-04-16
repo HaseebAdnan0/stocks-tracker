@@ -81,6 +81,16 @@ export interface TrackedSymbol {
   added_at: string;
 }
 
+export interface AccountTransaction {
+  id: number;
+  user_id: number;
+  type: 'deposit' | 'withdraw';
+  amount: number;
+  notes: string | null;
+  date: string;
+  created_at: string;
+}
+
 // Database path - Use DATA_DIR env var for production (persistent storage outside deployment)
 // On Hostinger: set DATA_DIR=/home/username/data in environment variables
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
@@ -228,6 +238,20 @@ function initializeSchema() {
     )
   `);
 
+  // Create account transactions table (deposits/withdrawals)
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS account_transactions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      type TEXT NOT NULL CHECK(type IN ('deposit', 'withdraw')),
+      amount REAL NOT NULL,
+      notes TEXT,
+      date TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
   // Create tracked symbols table
   database.exec(`
     CREATE TABLE IF NOT EXISTS tracked_symbols (
@@ -251,6 +275,7 @@ function initializeSchema() {
     CREATE INDEX IF NOT EXISTS idx_eod_data_symbol ON eod_data_cache(symbol);
     CREATE INDEX IF NOT EXISTS idx_fundamentals_symbol ON fundamentals_cache(symbol);
     CREATE INDEX IF NOT EXISTS idx_tracked_symbols ON tracked_symbols(symbol);
+    CREATE INDEX IF NOT EXISTS idx_account_transactions_user_id ON account_transactions(user_id);
   `);
 
   // Seed default KMI-30 symbols if table is empty
@@ -568,4 +593,47 @@ export function removeTrackedSymbol(symbol: string): boolean {
 export function isSymbolTracked(symbol: string): boolean {
   const stmt = getDb().prepare('SELECT 1 FROM tracked_symbols WHERE symbol = ?');
   return !!stmt.get(symbol.toUpperCase());
+}
+
+// Account balance operations
+export function getAccountBalance(userId: number): number {
+  const stmt = getDb().prepare(`
+    SELECT COALESCE(
+      SUM(CASE WHEN type = 'deposit' THEN amount ELSE -amount END),
+      0
+    ) as balance
+    FROM account_transactions WHERE user_id = ?
+  `);
+  return (stmt.get(userId) as { balance: number }).balance;
+}
+
+export function getAccountTransactions(userId: number): AccountTransaction[] {
+  const stmt = getDb().prepare(
+    'SELECT * FROM account_transactions WHERE user_id = ? ORDER BY date DESC, created_at DESC'
+  );
+  return stmt.all(userId) as AccountTransaction[];
+}
+
+export function createAccountTransaction(
+  transaction: Omit<AccountTransaction, 'id' | 'created_at'>
+): AccountTransaction {
+  const stmt = getDb().prepare(`
+    INSERT INTO account_transactions (user_id, type, amount, notes, date)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  const result = stmt.run(
+    transaction.user_id,
+    transaction.type,
+    transaction.amount,
+    transaction.notes,
+    transaction.date
+  );
+  const getStmt = getDb().prepare('SELECT * FROM account_transactions WHERE id = ?');
+  return getStmt.get(result.lastInsertRowid) as AccountTransaction;
+}
+
+export function deleteAccountTransaction(id: number, userId: number): boolean {
+  const stmt = getDb().prepare('DELETE FROM account_transactions WHERE id = ? AND user_id = ?');
+  const result = stmt.run(id, userId);
+  return result.changes > 0;
 }
