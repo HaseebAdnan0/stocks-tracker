@@ -152,8 +152,9 @@ export async function GET(request: NextRequest) {
 
     // Account-level metrics
     const currentlyInvested = totalInvestment; // cost basis of active holdings
-    const cashAvailable = accountBalance - currentlyInvested;
-    // Portfolio value = current market value of holdings + uninvested cash
+    // Cash = deposited amount - cost of active holdings + realized profits from sold stocks
+    const cashAvailable = accountBalance - currentlyInvested + totalRealizedPL;
+    // Portfolio value = current market value of active holdings + available cash
     const portfolioValue = totalCurrentValue + Math.max(cashAvailable, 0);
 
     return NextResponse.json({
