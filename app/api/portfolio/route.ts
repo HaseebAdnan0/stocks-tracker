@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllHoldings, createHolding } from '@/lib/db';
 import { getCachedMarketWatch } from '@/lib/cache';
-import { isKmi30, isShariahCompliant } from '@/lib/config';
+import { isKmi30, isShariahCompliant, getStockName } from '@/lib/config';
 import { getCurrentUser } from '@/lib/middleware';
 
 // Helper to get current price for a symbol
@@ -20,7 +20,15 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    const holdings = getAllHoldings(user.id);
+    const { searchParams } = new URL(request.url);
+    const statusFilter = searchParams.get('status'); // 'active' | 'archived' | null
+
+    const allHoldings = getAllHoldings(user.id);
+    const holdings = allHoldings.filter((h) => {
+      if (statusFilter === 'active') return h.quantity > 0;
+      if (statusFilter === 'archived') return h.quantity === 0;
+      return true;
+    });
 
     const holdingsData = await Promise.all(
       holdings.map(async (holding) => {
@@ -49,9 +57,20 @@ export async function GET(request: NextRequest) {
           indices.push('kmi_all_share');
         }
 
+        const soldQty = holding.total_sold_quantity || 0;
+        const soldValue = holding.total_sold_value || 0;
+        const avgSellPrice = soldQty > 0 ? soldValue / soldQty : null;
+        // For a fully sold holding, original investment = buy_price * soldQty.
+        // For partially sold, investment already reflects remaining qty only.
+        const isFullySold = holding.quantity === 0 && soldQty > 0;
+        const originalInvestment = isFullySold
+          ? buyPrice * soldQty
+          : Math.round(investment * 100) / 100;
+
         return {
           id: holding.id,
           symbol: holding.symbol,
+          name: getStockName(holding.symbol) || null,
           quantity: holding.quantity,
           buy_price: buyPrice,
           buy_date: holding.buy_date,
@@ -60,7 +79,9 @@ export async function GET(request: NextRequest) {
           current_price: currentPrice,
           change: change !== null ? Math.round(change * 100) / 100 : null,
           change_percent: changePercent !== null ? Math.round(changePercent * 100) / 100 : null,
-          investment: Math.round(investment * 100) / 100,
+          investment: isFullySold
+            ? Math.round(originalInvestment * 100) / 100
+            : Math.round(investment * 100) / 100,
           current_value: currentValue !== null ? Math.round(currentValue * 100) / 100 : null,
           pnl: pnl !== null ? Math.round(pnl * 100) / 100 : null,
           pnl_percent: pnlPercent !== null ? Math.round(pnlPercent * 100) / 100 : null,
@@ -69,6 +90,9 @@ export async function GET(request: NextRequest) {
           indices,
           status: holding.status || 'active',
           realized_pl: holding.realized_pl || 0,
+          total_sold_quantity: soldQty,
+          total_sold_value: Math.round(soldValue * 100) / 100,
+          avg_sell_price: avgSellPrice !== null ? Math.round(avgSellPrice * 100) / 100 : null,
         };
       })
     );

@@ -45,18 +45,27 @@ export async function GET(request: NextRequest) {
             total_invested: 0,
             current_value: 0,
             profit_loss: 0,
+            unrealized_pl: 0,
+            realized_pl: 0,
+            total_pl: 0,
           },
           '10x': {
             total_shares: 0,
             total_invested: 0,
             current_value: 0,
             profit_loss: 0,
+            unrealized_pl: 0,
+            realized_pl: 0,
+            total_pl: 0,
           },
           '100x': {
             total_shares: 0,
             total_invested: 0,
             current_value: 0,
             profit_loss: 0,
+            unrealized_pl: 0,
+            realized_pl: 0,
+            total_pl: 0,
           },
         },
       });
@@ -128,26 +137,21 @@ export async function GET(request: NextRequest) {
       };
     }
 
-    // Calculate what-if multipliers
+    // Calculate what-if multipliers. Each metric scales linearly with the multiplier.
+    const buildWhatIf = (mult: number) => ({
+      total_shares: totalShares * mult,
+      total_invested: Math.round(totalInvestment * mult * 100) / 100,
+      current_value: Math.round(totalCurrentValue * mult * 100) / 100,
+      profit_loss: Math.round(totalPnl * mult * 100) / 100,
+      unrealized_pl: Math.round(totalUnrealizedPL * mult * 100) / 100,
+      realized_pl: Math.round(totalRealizedPL * mult * 100) / 100,
+      total_pl: Math.round(totalPL * mult * 100) / 100,
+    });
+
     const whatIf = {
-      actual: {
-        total_shares: totalShares,
-        total_invested: Math.round(totalInvestment * 100) / 100,
-        current_value: Math.round(totalCurrentValue * 100) / 100,
-        profit_loss: Math.round(totalPnl * 100) / 100,
-      },
-      '10x': {
-        total_shares: totalShares * 10,
-        total_invested: Math.round(totalInvestment * 10 * 100) / 100,
-        current_value: Math.round(totalCurrentValue * 10 * 100) / 100,
-        profit_loss: Math.round(totalPnl * 10 * 100) / 100,
-      },
-      '100x': {
-        total_shares: totalShares * 100,
-        total_invested: Math.round(totalInvestment * 100 * 100) / 100,
-        current_value: Math.round(totalCurrentValue * 100 * 100) / 100,
-        profit_loss: Math.round(totalPnl * 100 * 100) / 100,
-      },
+      actual: buildWhatIf(1),
+      '10x': buildWhatIf(10),
+      '100x': buildWhatIf(100),
     };
 
     // Account-level metrics
